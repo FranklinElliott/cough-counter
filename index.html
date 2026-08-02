@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cough Counter — Stream Overlay</title>
+  <meta name="description" content="OBS cough counter with manual clicks and optional mic auto-detect." />
+  <style>
+    :root {
+      --bg: #070a10;
+      --panel: #101622;
+      --border: #273247;
+      --fg: #eef3ff;
+      --muted: #8fa0bb;
+      --primary: #7c9cff;
+      --accent: #5eead4;
+      --danger: #fb7185;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --shadow: 0 18px 50px rgba(0,0,0,.45);
+      --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font);
+      color: var(--fg);
+      background:
+        radial-gradient(900px 420px at 12% -10%, rgba(124,156,255,.18), transparent 55%),
+        radial-gradient(700px 360px at 90% 0%, rgba(94,234,212,.1), transparent 50%),
+        var(--bg);
+      line-height: 1.45;
+    }
+    body.overlay-mode {
+      background: transparent !important;
+      overflow: hidden;
+    }
+    a { color: var(--primary); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 22px 16px 72px; }
+    header.app-head {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      align-items: flex-end; justify-content: space-between; margin-bottom: 16px;
+    }
+    .brand h1 { margin: 0 0 6px; font-size: clamp(1.45rem, 3vw, 1.9rem); letter-spacing: -0.03em; }
+    .brand p { margin: 0; color: var(--muted); max-width: 58ch; font-size: 0.95rem; }
+    .badge {
+      font-size: 11px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+      padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border);
+      background: rgba(124,156,255,.1); color: #c7d6ff;
+    }
+    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 14px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: linear-gradient(180deg, var(--panel), #0c111b);
+      border: 1px solid var(--border); border-radius: 18px;
+      box-shadow: var(--shadow); padding: 14px;
+    }
+    .card h2 {
+      margin: 0 0 10px; font-size: 0.82rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .row + .row { margin-top: 10px; }
+    label.field {
+      display: flex; flex-direction: column; gap: 5px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted); flex: 1; min-width: 120px;
+    }
+    input[type="range"], input[type="text"], input[type="number"] {
+      width: 100%; border-radius: 11px; border: 1px solid var(--border);
+      background: #0a0f18; color: var(--fg); padding: 10px 11px; font: inherit;
+    }
+    input[type="range"] { padding: 0; height: 28px; }
+    .btn {
+      appearance: none; border: 0; cursor: pointer; border-radius: 11px;
+      padding: 10px 12px; font-weight: 800; font-size: 0.92rem;
+      color: #071018; background: var(--primary);
+    }
+    .btn:hover { filter: brightness(1.06); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+    .btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+    .btn.ok { background: var(--ok); color: #052e16; }
+    .btn.danger { background: var(--danger); color: #3f0b14; }
+    .btn.accent { background: var(--accent); color: #042f2e; }
+    .btn.sm { padding: 7px 10px; font-size: 12px; border-radius: 9px; }
+    .hint { font-size: 0.86rem; color: var(--muted); }
+    .warn {
+      font-size: 0.82rem; color: #fde68a; background: rgba(251,191,36,.08);
+      border: 1px solid rgba(251,191,36,.28); border-radius: 12px; padding: 10px 12px; margin-top: 10px;
+    }
+    .stat-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px;
+    }
+    @media (max-width: 560px) { .stat-grid { grid-template-columns: 1fr; } }
+    .stat {
+      border: 1px solid var(--border); border-radius: 14px; padding: 12px;
+      background: #0a0f18; text-align: center;
+    }
+    .stat .k { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); font-weight: 800; }
+    .stat .v { font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 900; margin-top: 4px; letter-spacing: -0.03em; }
+    .big-count {
+      text-align: center; padding: 18px 10px 8px;
+    }
+    .big-count .label {
+      font-size: 12px; font-weight: 800; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .big-count .num {
+      font-size: clamp(4rem, 14vw, 6.5rem); font-weight: 900;
+      letter-spacing: -0.05em; line-height: 1;
+      background: linear-gradient(180deg, #fff, #9db4ff);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      text-shadow: none;
+      filter: drop-shadow(0 10px 30px rgba(124,156,255,.25));
+    }
+    .meter-wrap { margin-top: 10px; }
+    .meter {
+      height: 12px; border-radius: 999px; background: #0a0f18; border: 1px solid var(--border);
+      overflow: hidden; position: relative;
+    }
+    .meter > i {
+      display: block; height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--primary), var(--danger));
+      transition: width 40ms linear;
+    }
+    .meter-labels {
+      display: flex; justify-content: space-between; margin-top: 6px;
+      font-size: 11px; color: var(--muted); font-weight: 700;
+    }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+      padding: 5px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+    }
+    .status-pill.on { color: #bbf7d0; border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.1); }
+    .status-pill.hot { color: #fecdd3; border-color: rgba(251,113,133,.45); background: rgba(251,113,133,.12); }
+    .url-box {
+      width: 100%; min-height: 70px; border-radius: 12px; border: 1px solid var(--border);
+      background: #0a0f18; color: var(--fg); padding: 10px 12px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      resize: vertical;
+    }
+    footer.note { margin-top: 14px; color: var(--muted); font-size: 0.86rem; }
+    .toast {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      background: #10151f; border: 1px solid var(--border); color: var(--fg);
+      padding: 10px 14px; border-radius: 999px; box-shadow: var(--shadow);
+      opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 50; font-weight: 700;
+    }
+    .toast.show { opacity: 1; }
+    .log {
+      max-height: 180px; overflow: auto; border: 1px solid var(--border);
+      border-radius: 12px; background: #0a0f18; padding: 8px 10px;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted);
+    }
+    .log div { padding: 2px 0; border-bottom: 1px solid rgba(39,50,71,.5); }
+    .log div:last-child { border-bottom: 0; }
+    .toggle {
+      display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+      user-select: none; font-size: 0.9rem; font-weight: 700;
+    }
+    .toggle input { width: 16px; height: 16px; }
+
+    /* ===== Overlay chrome ===== */
+    .ov {
+      min-height: 100vh; display: grid; place-items: end start; padding: 24px;
+      background: transparent;
+    }
+    .ov-card {
+      min-width: 220px; max-width: min(420px, 92vw);
+      padding: 14px 16px 12px;
+      border-radius: 18px;
+      background: rgba(8, 12, 20, 0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 16px 40px rgba(0,0,0,.35);
+      color: #fff;
+      user-select: none;
+    }
+    .ov-card.flash {
+      animation: coughPulse .45s ease;
+    }
+    @keyframes coughPulse {
+      0% { transform: scale(1); box-shadow: 0 0 0 rgba(251,113,133,0); }
+      35% { transform: scale(1.04); box-shadow: 0 0 28px rgba(251,113,133,.45); }
+      100% { transform: scale(1); box-shadow: 0 16px 40px rgba(0,0,0,.35); }
+    }
+    .ov-top {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+      color: rgba(255,255,255,.7);
+    }
+    .ov-count {
+      font-size: clamp(2.8rem, 8vw, 4.2rem); font-weight: 900; letter-spacing: -0.05em;
+      line-height: 1; margin: 2px 0 4px;
+    }
+    .ov-meta {
+      display: flex; flex-wrap: wrap; gap: 10px 14px;
+      font-size: 12px; font-weight: 700; color: rgba(255,255,255,.75);
+    }
+    .ov-meta b { color: #fff; }
+    .ov-bar {
+      margin-top: 8px; height: 6px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden;
+    }
+    .ov-bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #5eead4, #7c9cff, #fb7185); }
+    .ov-hint {
+      margin-top: 8px; font-size: 11px; color: rgba(255,255,255,.55); font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div class="toast" id="toast"></div>
+  <script>
+(function () {
+  const STORE = "cough-counter-v1";
+
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.classList.remove("show"); }, 1600);
+  }
+
+  function loadState() {
+    try {
+      return JSON.parse(localStorage.getItem(STORE) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function saveState(partial) {
+    const next = Object.assign(loadState(), partial, { updatedAt: Date.now() });
+    try { localStorage.setItem(STORE, JSON.stringify(next)); } catch (e) {}
+    try {
+      localStorage.setItem(STORE + ":tick", String(Date.now()));
+    } catch (e) {}
+    return next;
+  }
+
+  function getParams() {
+    const p = new URLSearchParams(location.search);
+    const mode = p.get("mode") === "overlay" ? "overlay" : "control";
+    const stored = loadState();
+    let count = parseInt(p.get("count") || "", 10);
+    if (!Number.isFinite(count)) count = Number.isFinite(stored.count) ? stored.count : 0;
+    count = Math.max(0, Math.floor(count));
+
+    let sensitivity = parseInt(p.get("sensitivity") || p.get("sens") || "", 10);
+    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(stored.sensitivity) ? stored.sensitivity : 55;
+    sensitivity = Math.min(95, Math.max(15, sensitivity));
+
+    let cooldown = parseInt(p.get("cooldown") || "", 10);
+    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(stored.cooldown) ? stored.cooldown : 1400;
+    cooldown = Math.min(4000, Math.max(500, cooldown));
+
+    let auto = p.get("auto");
+    if (auto == null) auto = stored.auto ? "1" : "0";
+    auto = auto === "1" || auto === "true";
+
+    let compact = p.get("compact") === "1";
+    let label = (p.get("label") || stored.label || "COUGHS").trim().slice(0, 18) || "COUGHS";
+
+    let sessionStart = parseInt(p.get("sessionStart") || "", 10);
+    if (!Number.isFinite(sessionStart) || sessionStart < 1000000000) {
+      sessionStart = Number.isFinite(stored.sessionStart) ? stored.sessionStart : Math.floor(Date.now() / 1000);
+    }
+
+    return { mode, count, sensitivity, cooldown, auto, compact, label, sessionStart };
+  }
+
+  function setParams(patch) {
+    const cur = getParams();
+    const next = Object.assign({}, cur, patch || {});
+    saveState({
+      count: next.count,
+      sensitivity: next.sensitivity,
+      cooldown: next.cooldown,
+      auto: !!next.auto,
+      label: next.label,
+      sessionStart: next.sessionStart,
+    });
+    const u = new URL(location.href);
+    if (next.mode === "overlay") u.searchParams.set("mode", "overlay");
+    else u.searchParams.delete("mode");
+    u.searchParams.set("count", String(next.count));
+    u.searchParams.set("sensitivity", String(next.sensitivity));
+    u.searchParams.set("cooldown", String(next.cooldown));
+    u.searchParams.set("auto", next.auto ? "1" : "0");
+    u.searchParams.set("label", next.label);
+    u.searchParams.set("sessionStart", String(next.sessionStart));
+    if (next.compact) u.searchParams.set("compact", "1");
+    else u.searchParams.delete("compact");
+    history.replaceState(null, "", u);
+    render();
+  }
+
+  function formatDuration(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+  }
+
+  function coughsPerHour(count, sessionStart) {
+    const hours = Math.max(1 / 60, (Date.now() / 1000 - sessionStart) / 3600);
+    return (count / hours).toFixed(1);
+  }
+
+  // -------- Mic / cough detect --------
+  let audio = {
+    stream: null,
+    ctx: null,
+    analyser: null,
+    data: null,
+    raf: 0,
+    level: 0,
+    lastCoughAt: 0,
+    armed: false,
+    listening: false,
+    error: "",
+  };
+  let logLines = [];
+  let tickTimer = 0;
+  let flashUntil = 0;
+
+  function pushLog(msg) {
+    const t = new Date().toLocaleTimeString();
+    logLines.unshift(t + "  " + msg);
+    if (logLines.length > 40) logLines.pop();
+    const box = document.getElementById("eventLog");
+    if (box) box.innerHTML = logLines.map(function (l) { return "<div>" + escapeHtml(l) + "</div>"; }).join("");
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&")
+      .replace(/</g, "<")
+      .replace(/>/g, ">")
+      .replace(/"/g, """);
+  }
+
+  function stopMic() {
+    if (audio.raf) cancelAnimationFrame(audio.raf);
+    audio.raf = 0;
+    if (audio.stream) {
+      audio.stream.getTracks().forEach(function (t) { t.stop(); });
+    }
+    if (audio.ctx && audio.ctx.state !== "closed") {
+      try { audio.ctx.close(); } catch (e) {}
+    }
+    audio.stream = null;
+    audio.ctx = null;
+    audio.analyser = null;
+    audio.data = null;
+    audio.listening = false;
+    audio.level = 0;
+  }
+
+  async function startMic() {
+    audio.error = "";
+    try {
+      stopMic();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      audio.stream = stream;
+      audio.ctx = ctx;
+      audio.analyser = analyser;
+      audio.data = new Uint8Array(analyser.frequencyBinCount);
+      audio.listening = true;
+      audio.armed = true;
+      pushLog("Mic enabled");
+      loopAudio();
+      render();
+      return true;
+    } catch (err) {
+      audio.error = (err && err.message) || "Mic permission denied";
+      audio.listening = false;
+      pushLog("Mic failed: " + audio.error);
+      render();
+      return false;
+    }
+  }
+
+  function loopAudio() {
+    if (!audio.analyser || !audio.data) return;
+    audio.analyser.getByteFrequencyData(audio.data);
+    const data = audio.data;
+    const sampleRate = audio.ctx.sampleRate || 48000;
+    const binHz = sampleRate / (audio.analyser.fftSize || 2048);
+
+    // Bands: cough energy often mid (400–3500Hz), not pure sub bass
+    let mid = 0, midN = 0, high = 0, highN = 0, low = 0, lowN = 0;
+    for (let i = 0; i < data.length; i++) {
+      const hz = i * binHz;
+      const v = data[i];
+      if (hz < 200) { low += v; lowN++; }
+      else if (hz < 3500) { mid += v; midN++; }
+      else if (hz < 8000) { high += v; highN++; }
+    }
+    mid = midN ? mid / midN : 0;
+    high = highN ? high / highN : 0;
+    low = lowN ? low / lowN : 0;
+
+    // 0–100 level from mid emphasis
+    const raw = mid * 0.75 + high * 0.25 - low * 0.15;
+    audio.level = Math.max(0, Math.min(100, (raw / 255) * 140));
+
+    const p = getParams();
+    if (p.auto && audio.armed && audio.listening) {
+      const threshold = p.sensitivity; // higher = harder to trigger? 
+      // UX: higher sensitivity slider = MORE sensitive (easier to trigger)
+      // so threshold is inverted: trigger when level > (100 - sensitivity*0.7)-ish
+      const triggerAt = 100 - p.sensitivity * 0.7; // sens 55 → trigger ~61.5? wait that's wrong
+      // Better: sensitivity 15 = hard (need level 70+), sensitivity 95 = easy (need level 20+)
+      const need = 88 - (p.sensitivity / 100) * 68; // 15→~78, 55→~50, 95→~23
+      const now = Date.now();
+      const spectralOk = mid > low * 0.9 && mid > 18;
+      if (audio.level >= need && spectralOk && now - audio.lastCoughAt >= p.cooldown) {
+        audio.lastCoughAt = now;
+        registerCough("auto");
+      }
+    }
+
+    const fill = document.getElementById("levelFill");
+    if (fill) fill.style.width = audio.level.toFixed(1) + "%";
+    const fillOv = document.getElementById("ovLevelFill");
+    if (fillOv) fillOv.style.width = audio.level.toFixed(1) + "%";
+    const lvl = document.getElementById("levelVal");
+    if (lvl) lvl.textContent = Math.round(audio.level) + "%";
+
+    audio.raf = requestAnimationFrame(loopAudio);
+  }
+
+  function registerCough(source) {
+    const p = getParams();
+    const count = p.count + 1;
+    flashUntil = Date.now() + 450;
+    saveState({ count: count });
+    pushLog((source === "auto" ? "Auto" : "Manual") + " cough → " + count);
+    // update URL count without full remount when possible
+    const u = new URL(location.href);
+    u.searchParams.set("count", String(count));
+    history.replaceState(null, "", u);
+    const num = document.getElementById("countNum");
+    if (num) num.textContent = String(count);
+    const ov = document.getElementById("ovCount");
+    if (ov) ov.textContent = String(count);
+    const cph = document.getElementById("cphVal");
+    if (cph) cph.textContent = coughsPerHour(count, p.sessionStart);
+    const cph2 = document.getElementById("ovCph");
+    if (cph2) cph2.textContent = coughsPerHour(count, p.sessionStart);
+    const card = document.querySelector(".ov-card");
+    if (card) {
+      card.classList.remove("flash");
+      void card.offsetWidth;
+      card.classList.add("flash");
+    }
+    // keep storage in sync for multi-tab control
+    saveState({ count: count, sessionStart: p.sessionStart, sensitivity: p.sensitivity, cooldown: p.cooldown, auto: p.auto, label: p.label });
+  }
+
+  function adjustCount(delta) {
+    const p = getParams();
+    const count = Math.max(0, p.count + delta);
+    setParams({ count: count });
+    pushLog((delta > 0 ? "Manual +" : "Manual ") + delta + " → " + count);
+  }
+
+  function obsUrl() {
+    const p = getParams();
+    const u = new URL(location.origin + location.pathname);
+    u.searchParams.set("mode", "overlay");
+    u.searchParams.set("count", String(p.count));
+    u.searchParams.set("sensitivity", String(p.sensitivity));
+    u.searchParams.set("cooldown", String(p.cooldown));
+    u.searchParams.set("auto", p.auto ? "1" : "0");
+    u.searchParams.set("label", p.label);
+    u.searchParams.set("sessionStart", String(p.sessionStart));
+    return u.toString();
+  }
+
+  function renderOverlay(p) {
+    document.body.className = "overlay-mode";
+    document.documentElement.style.background = "transparent";
+    const app = document.getElementById("app");
+    const elapsed = formatDuration(Date.now() - p.sessionStart * 1000);
+    const micLabel = audio.listening ? "MIC ON" : "MIC OFF";
+    app.innerHTML =
+      '<div class="ov"><div class="ov-card' + (Date.now() < flashUntil ? " flash" : "") + '">' +
+      '<div class="ov-top"><span>' + escapeHtml(p.label) + '</span><span>' + micLabel + (p.auto ? " · AUTO" : " · MANUAL") + "</span></div>" +
+      '<div class="ov-count" id="ovCount">' + p.count + "</div>" +
+      '<div class="ov-meta"><span>Session <b id="ovElapsed">' + elapsed + "</b></span><span>Per hour <b id=\"ovCph\">" + coughsPerHour(p.count, p.sessionStart) + "</b></span></div>" +
+      (p.auto
+        ? '<div class="ov-bar"><i id="ovLevelFill" style="width:' + audio.level.toFixed(1) + '%"></i></div>' +
+          (audio.listening
+            ? ""
+            : '<div class="ov-hint">Interact with this browser source → Enable mic</div>')
+        : "") +
+      "</div></div>";
+  }
+
+  function renderControl(p) {
+    document.body.className = "";
+    document.documentElement.style.background = "";
+    const app = document.getElementById("app");
+    const elapsed = formatDuration(Date.now() - p.sessionStart * 1000);
+    const need = Math.round(88 - (p.sensitivity / 100) * 68);
+    app.innerHTML =
+      '<div class="wrap">' +
+      '<header class="app-head"><div class="brand">' +
+      "<h1>Cough Counter</h1>" +
+      "<p>Manual tally + optional mic auto-detect for OBS. Auto is helpful, not perfect — use <strong>−1</strong> when it false-triggers.</p>" +
+      '</div><span class="badge">Manual · Mic auto · OBS</span></header>' +
+      '<div class="grid">' +
+      '<section class="card">' +
+      "<h2>Counter</h2>" +
+      '<div class="big-count"><div class="label">' + escapeHtml(p.label) + '</div><div class="num" id="countNum">' + p.count + "</div></div>" +
+      '<div class="row" style="justify-content:center">' +
+      '<button type="button" class="btn danger" id="btnMinus">−1</button>' +
+      '<button type="button" class="btn ok" id="btnPlus">+1 Cough</button>' +
+      '<button type="button" class="btn ghost" id="btnReset">Reset</button>' +
+      "</div>" +
+      '<div class="stat-grid">' +
+      '<div class="stat"><div class="k">Session</div><div class="v" id="elapsedVal">' + elapsed + "</div></div>" +
+      '<div class="stat"><div class="k">Per hour</div><div class="v" id="cphVal">' + coughsPerHour(p.count, p.sessionStart) + "</div></div>" +
+      '<div class="stat"><div class="k">Last trigger</div><div class="v" style="font-size:1.1rem">' + (audio.lastCoughAt ? new Date(audio.lastCoughAt).toLocaleTimeString() : "—") + "</div></div>" +
+      "</div>" +
+      '<div class="row" style="margin-top:12px">' +
+      '<span class="status-pill' + (audio.listening ? " on" : "") + '" id="micPill">' + (audio.listening ? "Mic live" : "Mic off") + "</span>" +
+      '<span class="status-pill' + (p.auto ? " hot" : "") + '">' + (p.auto ? "Auto on" : "Auto off") + "</span>" +
+      '<span class="hint">Hotkeys: <strong>Space / +</strong> cough · <strong>−</strong> undo · <strong>R</strong> reset</span>' +
+      "</div>" +
+      "</section>" +
+
+      '<section class="card">' +
+      "<h2>Mic auto-detect</h2>" +
+      '<label class="toggle"><input type="checkbox" id="autoToggle"' + (p.auto ? " checked" : "") + " /> Enable auto cough detection</label>" +
+      '<div class="row" style="margin-top:10px">' +
+      '<button type="button" class="btn accent" id="btnMic">' + (audio.listening ? "Stop mic" : "Enable mic") + "</button>" +
+      '<button type="button" class="btn ghost sm" id="btnTest">Force +1 test</button>' +
+      "</div>" +
+      '<div class="meter-wrap">' +
+      '<div class="meter"><i id="levelFill" style="width:' + audio.level.toFixed(1) + '%"></i></div>' +
+      '<div class="meter-labels"><span>Level <span id="levelVal">' + Math.round(audio.level) + '%</span></span><span>Trigger ≈ ' + need + "%+</span></div>" +
+      "</div>" +
+      '<div class="row">' +
+      '<label class="field">Sensitivity (higher = more sensitive)<input id="sens" type="range" min="15" max="95" value="' + p.sensitivity + '" /></label>' +
+      "</div>" +
+      '<div class="row">' +
+      '<label class="field">Cooldown ms<input id="cool" type="range" min="500" max="4000" step="100" value="' + p.cooldown + '" /></label>' +
+      "</div>" +
+      '<p class="hint" style="margin:8px 0 0">Cough-ish bursts in the mid band above the trigger line count once per cooldown. Speech/laughs can false-trigger — lower sensitivity or hit −1.</p>' +
+      (audio.error ? '<div class="warn">Mic error: ' + escapeHtml(audio.error) + "</div>" : "") +
+      '<div class="warn"><strong>OBS note:</strong> Auto works best if this page (or the overlay) has mic permission. In OBS: right-click Browser Source → <em>Interact</em> → Enable mic. Control page and OBS do not share live state — copy a fresh overlay URL after big setting changes, or run auto in the overlay itself.</div>' +
+      "</section>" +
+      "</div>" +
+
+      '<section class="card" style="margin-top:14px">' +
+      "<h2>OBS overlay</h2>" +
+      '<div class="row">' +
+      '<label class="field">Label<input id="labelInput" type="text" maxlength="18" value="' + escapeHtml(p.label) + '" /></label>' +
+      '<label class="field">Session start (unix sec)<input id="sessionInput" type="number" value="' + p.sessionStart + '" /></label>' +
+      "</div>" +
+      '<div class="row">' +
+      '<button type="button" class="btn" id="btnNewSession">New session (keep count?)</button>' +
+      '<button type="button" class="btn ghost" id="btnNewSessionReset">New session + reset count</button>' +
+      '<button type="button" class="btn ghost" id="btnCopy">Copy overlay URL</button>' +
+      '<button type="button" class="btn ghost" id="btnOpenOv">Open overlay</button>' +
+      "</div>" +
+      '<label class="field" style="margin-top:10px">Overlay URL<textarea class="url-box" id="urlBox" readonly>' + escapeHtml(obsUrl()) + "</textarea></label>" +
+      '<p class="hint">OBS: Browser Source · Width 500 · Height 320 · Transparent background · paste overlay URL</p>' +
+      "</section>" +
+
+      '<section class="card" style="margin-top:14px">' +
+      "<h2>Event log</h2>" +
+      '<div class="log" id="eventLog">' + (logLines.length ? logLines.map(function (l) { return "<div>" + escapeHtml(l) + "</div>"; }).join("") : "<div>No events yet</div>") + "</div>" +
+      "</section>" +
+
+      '<footer class="note">Client-side only · <a href="https://github.com/FranklinElliott/cough-counter">GitHub</a> · Auto-detect is approximate</footer>' +
+      "</div>";
+
+    wireControl(p);
+  }
+
+  function wireControl(p) {
+    document.getElementById("btnPlus").onclick = function () { adjustCount(1); };
+    document.getElementById("btnMinus").onclick = function () { adjustCount(-1); };
+    document.getElementById("btnReset").onclick = function () {
+      if (confirm("Reset cough count to 0?")) setParams({ count: 0 });
+    };
+    document.getElementById("btnTest").onclick = function () { registerCough("manual"); render(); };
+    document.getElementById("autoToggle").onchange = function (e) {
+      setParams({ auto: e.target.checked });
+    };
+    document.getElementById("btnMic").onclick = async function () {
+      if (audio.listening) {
+        stopMic();
+        pushLog("Mic stopped");
+        render();
+      } else {
+        await startMic();
+      }
+    };
+    document.getElementById("sens").oninput = function (e) {
+      // live preview of threshold text without resetting mic
+      saveState({ sensitivity: parseInt(e.target.value, 10) });
+      const u = new URL(location.href);
+      u.searchParams.set("sensitivity", e.target.value);
+      history.replaceState(null, "", u);
+      render();
+    };
+    document.getElementById("cool").oninput = function (e) {
+      saveState({ cooldown: parseInt(e.target.value, 10) });
+      const u = new URL(location.href);
+      u.searchParams.set("cooldown", e.target.value);
+      history.replaceState(null, "", u);
+      render();
+    };
+    document.getElementById("labelInput").onchange = function (e) {
+      setParams({ label: e.target.value.trim().slice(0, 18) || "COUGHS" });
+    };
+    document.getElementById("sessionInput").onchange = function (e) {
+      const n = parseInt(e.target.value, 10);
+      if (Number.isFinite(n) && n > 1000000000) setParams({ sessionStart: n });
+    };
+    document.getElementById("btnNewSession").onclick = function () {
+      setParams({ sessionStart: Math.floor(Date.now() / 1000) });
+      toast("New session timer");
+    };
+    document.getElementById("btnNewSessionReset").onclick = function () {
+      setParams({ sessionStart: Math.floor(Date.now() / 1000), count: 0 });
+      toast("Session + count reset");
+    };
+    document.getElementById("btnCopy").onclick = async function () {
+      try {
+        await navigator.clipboard.writeText(obsUrl());
+        toast("Overlay URL copied");
+      } catch (e) {
+        document.getElementById("urlBox").select();
+        toast("Copy from the box");
+      }
+    };
+    document.getElementById("btnOpenOv").onclick = function () {
+      window.open(obsUrl(), "_blank");
+    };
+  }
+
+  function render() {
+    const p = getParams();
+    if (p.mode === "overlay") renderOverlay(p);
+    else renderControl(p);
+  }
+
+  // hotkeys (control mode)
+  window.addEventListener("keydown", function (e) {
+    if (getParams().mode === "overlay") return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (e.code === "Space" || e.key === "+" || e.key === "=") {
+      e.preventDefault();
+      adjustCount(1);
+    } else if (e.key === "-" || e.key === "_") {
+      e.preventDefault();
+      adjustCount(-1);
+    } else if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      if (confirm("Reset cough count to 0?")) setParams({ count: 0 });
+    }
+  });
+
+  // storage sync if two control tabs
+  window.addEventListener("storage", function (e) {
+    if (e.key === STORE || e.key === STORE + ":tick") render();
+  });
+
+  // session clock
+  function startTicks() {
+    clearInterval(tickTimer);
+    tickTimer = setInterval(function () {
+      const p = getParams();
+      const elapsed = formatDuration(Date.now() - p.sessionStart * 1000);
+      const a = document.getElementById("elapsedVal");
+      if (a) a.textContent = elapsed;
+      const b = document.getElementById("ovElapsed");
+      if (b) b.textContent = elapsed;
+      const c = document.getElementById("cphVal");
+      if (c) c.textContent = coughsPerHour(p.count, p.sessionStart);
+      const d = document.getElementById("ovCph");
+      if (d) d.textContent = coughsPerHour(p.count, p.sessionStart);
+    }, 500);
+  }
+
+  // Overlay: auto-start mic if auto=1 (user may need Interact first)
+  async function boot() {
+    const p = getParams();
+    // ensure session exists in storage
+    saveState({
+      count: p.count,
+      sensitivity: p.sensitivity,
+      cooldown: p.cooldown,
+      auto: p.auto,
+      label: p.label,
+      sessionStart: p.sessionStart,
+    });
+    render();
+    startTicks();
+    if (p.mode === "overlay" && p.auto) {
+      // try mic; if blocked, hint stays on overlay
+      startMic();
+    }
+  }
+
+  boot();
+})();
+  </script>
+</body>
+</html>
