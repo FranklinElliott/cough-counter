@@ -1,337 +1,114 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cough Counter — Stream Overlay</title>
-  <meta name="description" content="OBS cough counter with manual clicks and optional mic auto-detect." />
-  <style>
-    :root {
-      --bg: #070a10;
-      --panel: #101622;
-      --border: #273247;
-      --fg: #eef3ff;
-      --muted: #8fa0bb;
-      --primary: #7c9cff;
-      --accent: #5eead4;
-      --danger: #fb7185;
-      --ok: #4ade80;
-      --warn: #fbbf24;
-      --shadow: 0 18px 50px rgba(0,0,0,.45);
-      --font: "Segoe UI", system-ui, -apple-system, sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; }
-    body {
-      font-family: var(--font);
-      color: var(--fg);
-      background:
-        radial-gradient(900px 420px at 12% -10%, rgba(124,156,255,.18), transparent 55%),
-        radial-gradient(700px 360px at 90% 0%, rgba(94,234,212,.1), transparent 50%),
-        var(--bg);
-      line-height: 1.45;
-    }
-    body.overlay-mode {
-      background: transparent !important;
-      overflow: hidden;
-    }
-    a { color: var(--primary); }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 22px 16px 72px; }
-    header.app-head {
-      display: flex; flex-wrap: wrap; gap: 12px;
-      align-items: flex-end; justify-content: space-between; margin-bottom: 16px;
-    }
-    .brand h1 { margin: 0 0 6px; font-size: clamp(1.45rem, 3vw, 1.9rem); letter-spacing: -0.03em; }
-    .brand p { margin: 0; color: var(--muted); max-width: 58ch; font-size: 0.95rem; }
-    .badge {
-      font-size: 11px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
-      padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border);
-      background: rgba(124,156,255,.1); color: #c7d6ff;
-    }
-    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 14px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
-    .card {
-      background: linear-gradient(180deg, var(--panel), #0c111b);
-      border: 1px solid var(--border); border-radius: 18px;
-      box-shadow: var(--shadow); padding: 14px;
-    }
-    .card h2 {
-      margin: 0 0 10px; font-size: 0.82rem; letter-spacing: 0.08em;
-      text-transform: uppercase; color: var(--muted);
-    }
-    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .row + .row { margin-top: 10px; }
-    label.field {
-      display: flex; flex-direction: column; gap: 5px;
-      font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
-      text-transform: uppercase; color: var(--muted); flex: 1; min-width: 120px;
-    }
-    input[type="range"], input[type="text"], input[type="number"] {
-      width: 100%; border-radius: 11px; border: 1px solid var(--border);
-      background: #0a0f18; color: var(--fg); padding: 10px 11px; font: inherit;
-    }
-    input[type="range"] { padding: 0; height: 28px; }
-    .btn {
-      appearance: none; border: 0; cursor: pointer; border-radius: 11px;
-      padding: 10px 12px; font-weight: 800; font-size: 0.92rem;
-      color: #071018; background: var(--primary);
-    }
-    .btn:hover { filter: brightness(1.06); }
-    .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
-    .btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); }
-    .btn.ok { background: var(--ok); color: #052e16; }
-    .btn.danger { background: var(--danger); color: #3f0b14; }
-    .btn.accent { background: var(--accent); color: #042f2e; }
-    .btn.sm { padding: 7px 10px; font-size: 12px; border-radius: 9px; }
-    .hint { font-size: 0.86rem; color: var(--muted); }
-    .warn {
-      font-size: 0.82rem; color: #fde68a; background: rgba(251,191,36,.08);
-      border: 1px solid rgba(251,191,36,.28); border-radius: 12px; padding: 10px 12px; margin-top: 10px;
-    }
-    .stat-grid {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px;
-    }
-    @media (max-width: 560px) { .stat-grid { grid-template-columns: 1fr; } }
-    .stat {
-      border: 1px solid var(--border); border-radius: 14px; padding: 12px;
-      background: #0a0f18; text-align: center;
-    }
-    .stat .k { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); font-weight: 800; }
-    .stat .v { font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 900; margin-top: 4px; letter-spacing: -0.03em; }
-    .big-count {
-      text-align: center; padding: 18px 10px 8px;
-    }
-    .big-count .label {
-      font-size: 12px; font-weight: 800; letter-spacing: 0.12em;
-      text-transform: uppercase; color: var(--muted);
-    }
-    .big-count .num {
-      font-size: clamp(4rem, 14vw, 6.5rem); font-weight: 900;
-      letter-spacing: -0.05em; line-height: 1;
-      background: linear-gradient(180deg, #fff, #9db4ff);
-      -webkit-background-clip: text; background-clip: text; color: transparent;
-      text-shadow: none;
-      filter: drop-shadow(0 10px 30px rgba(124,156,255,.25));
-    }
-    .meter-wrap { margin-top: 10px; }
-    .meter {
-      height: 12px; border-radius: 999px; background: #0a0f18; border: 1px solid var(--border);
-      overflow: hidden; position: relative;
-    }
-    .meter > i {
-      display: block; height: 100%; width: 0%;
-      background: linear-gradient(90deg, var(--accent), var(--primary), var(--danger));
-      transition: width 40ms linear;
-    }
-    .meter-labels {
-      display: flex; justify-content: space-between; margin-top: 6px;
-      font-size: 11px; color: var(--muted); font-weight: 700;
-    }
-    .status-pill {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
-      padding: 5px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
-    }
-    .status-pill.on { color: #bbf7d0; border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.1); }
-    .status-pill.hot { color: #fecdd3; border-color: rgba(251,113,133,.45); background: rgba(251,113,133,.12); }
-    .url-box {
-      width: 100%; min-height: 70px; border-radius: 12px; border: 1px solid var(--border);
-      background: #0a0f18; color: var(--fg); padding: 10px 12px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      resize: vertical;
-    }
-    footer.note { margin-top: 14px; color: var(--muted); font-size: 0.86rem; }
-    .toast {
-      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-      background: #10151f; border: 1px solid var(--border); color: var(--fg);
-      padding: 10px 14px; border-radius: 999px; box-shadow: var(--shadow);
-      opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 50; font-weight: 700;
-    }
-    .toast.show { opacity: 1; }
-    .log {
-      max-height: 180px; overflow: auto; border: 1px solid var(--border);
-      border-radius: 12px; background: #0a0f18; padding: 8px 10px;
-      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted);
-    }
-    .log div { padding: 2px 0; border-bottom: 1px solid rgba(39,50,71,.5); }
-    .log div:last-child { border-bottom: 0; }
-    .toggle {
-      display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
-      user-select: none; font-size: 0.9rem; font-weight: 700;
-    }
-    .toggle input { width: 16px; height: 16px; }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cough Counter — Live Sync Overlay</title>
+<style>
 
-    /* ===== Overlay chrome ===== */
-    .ov {
-      min-height: 100vh; display: grid; place-items: end start; padding: 24px;
-      background: transparent;
-    }
-    .ov-card {
-      min-width: 220px; max-width: min(420px, 92vw);
-      padding: 14px 16px 12px;
-      border-radius: 18px;
-      background: rgba(8, 12, 20, 0.55);
-      border: 1px solid rgba(255,255,255,0.12);
-      backdrop-filter: blur(10px);
-      box-shadow: 0 16px 40px rgba(0,0,0,.35);
-      color: #fff;
-      user-select: none;
-    }
-    .ov-card.flash {
-      animation: coughPulse .45s ease;
-    }
-    @keyframes coughPulse {
-      0% { transform: scale(1); box-shadow: 0 0 0 rgba(251,113,133,0); }
-      35% { transform: scale(1.04); box-shadow: 0 0 28px rgba(251,113,133,.45); }
-      100% { transform: scale(1); box-shadow: 0 16px 40px rgba(0,0,0,.35); }
-    }
-    .ov-top {
-      display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
-      color: rgba(255,255,255,.7);
-    }
-    .ov-count {
-      font-size: clamp(2.8rem, 8vw, 4.2rem); font-weight: 900; letter-spacing: -0.05em;
-      line-height: 1; margin: 2px 0 4px;
-    }
-    .ov-meta {
-      display: flex; flex-wrap: wrap; gap: 10px 14px;
-      font-size: 12px; font-weight: 700; color: rgba(255,255,255,.75);
-    }
-    .ov-meta b { color: #fff; }
-    .ov-bar {
-      margin-top: 8px; height: 6px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden;
-    }
-    .ov-bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #5eead4, #7c9cff, #fb7185); }
-    .ov-hint {
-      margin-top: 8px; font-size: 11px; color: rgba(255,255,255,.55); font-weight: 600;
-    }
-  </style>
+:root{--bg:#070a10;--panel:#101622;--border:#273247;--fg:#eef3ff;--muted:#8fa0bb;--primary:#7c9cff;--accent:#5eead4;--danger:#fb7185;--ok:#4ade80;--shadow:0 18px 50px rgba(0,0,0,.45);--font:"Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%}
+body{font-family:var(--font);color:var(--fg);background:radial-gradient(900px 420px at 12% -10%,rgba(124,156,255,.18),transparent 55%),radial-gradient(700px 360px at 90% 0%,rgba(94,234,212,.1),transparent 50%),var(--bg);line-height:1.45}
+body.overlay-mode{background:transparent!important;overflow:hidden}
+a{color:var(--primary)}
+.wrap{max-width:980px;margin:0 auto;padding:22px 16px 72px}
+header.app-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
+.brand h1{margin:0 0 6px;font-size:clamp(1.45rem,3vw,1.9rem);letter-spacing:-.03em}
+.brand p{margin:0;color:var(--muted);max-width:62ch;font-size:.95rem}
+.badge{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:rgba(124,156,255,.1);color:#c7d6ff}
+.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:linear-gradient(180deg,var(--panel),#0c111b);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);padding:14px}
+.card h2{margin:0 0 10px;font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.row+.row{margin-top:10px}
+label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);flex:1;min-width:120px}
+input[type=range],input[type=text],input[type=number]{width:100%;border-radius:11px;border:1px solid var(--border);background:#0a0f18;color:var(--fg);padding:10px 11px;font:inherit}
+input[type=range]{padding:0;height:28px}
+.btn{appearance:none;border:0;cursor:pointer;border-radius:11px;padding:10px 12px;font-weight:800;font-size:.92rem;color:#071018;background:var(--primary)}
+.btn:hover{filter:brightness(1.06)}.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--border)}
+.btn.ok{background:var(--ok);color:#052e16}.btn.danger{background:var(--danger);color:#3f0b14}.btn.accent{background:var(--accent);color:#042f2e}
+.btn.sm{padding:7px 10px;font-size:12px;border-radius:9px}
+.hint{font-size:.86rem;color:var(--muted)}
+.warn{font-size:.82rem;color:#fde68a;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.28);border-radius:12px;padding:10px 12px;margin-top:10px}
+.okbox{font-size:.82rem;color:#bbf7d0;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.28);border-radius:12px;padding:10px 12px;margin-top:10px}
+.stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
+@media(max-width:560px){.stat-grid{grid-template-columns:1fr}}
+.stat{border:1px solid var(--border);border-radius:14px;padding:12px;background:#0a0f18;text-align:center}
+.stat .k{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:800}
+.stat .v{font-size:clamp(1.4rem,4vw,2rem);font-weight:900;margin-top:4px;letter-spacing:-.03em}
+.big-count{text-align:center;padding:18px 10px 8px}
+.big-count .label{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.big-count .num{font-size:clamp(4rem,14vw,6.5rem);font-weight:900;letter-spacing:-.05em;line-height:1;background:linear-gradient(180deg,#fff,#9db4ff);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 10px 30px rgba(124,156,255,.25))}
+.meter{height:12px;border-radius:999px;background:#0a0f18;border:1px solid var(--border);overflow:hidden}
+.meter>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--primary),var(--danger));transition:width 40ms linear}
+.meter-labels{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--muted);font-weight:700}
+.status-pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:5px 9px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+.status-pill.on{color:#bbf7d0;border-color:rgba(74,222,128,.4);background:rgba(74,222,128,.1)}
+.status-pill.hot{color:#fecdd3;border-color:rgba(251,113,133,.45);background:rgba(251,113,133,.12)}
+.status-pill.sync{color:#a5f3fc;border-color:rgba(94,234,212,.45);background:rgba(94,234,212,.1)}
+.url-box{width:100%;min-height:70px;border-radius:12px;border:1px solid var(--border);background:#0a0f18;color:var(--fg);padding:10px 12px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;resize:vertical}
+footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#10151f;border:1px solid var(--border);color:var(--fg);padding:10px 14px;border-radius:999px;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .2s;z-index:50;font-weight:700}
+.toast.show{opacity:1}
+.log{max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:#0a0f18;padding:8px 10px;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
+.log div{padding:2px 0;border-bottom:1px solid rgba(39,50,71,.5)}.log div:last-child{border-bottom:0}
+.toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:.9rem;font-weight:700}
+.toggle input{width:16px;height:16px}
+.room-code{font:800 1.05rem/1.2 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.04em;color:var(--accent)}
+.ov{min-height:100vh;display:grid;place-items:end start;padding:24px;background:transparent}
+.ov-card{min-width:220px;max-width:min(420px,92vw);padding:14px 16px 12px;border-radius:18px;background:rgba(8,12,20,.55);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(10px);box-shadow:0 16px 40px rgba(0,0,0,.35);color:#fff;user-select:none}
+.ov-card.flash{animation:coughPulse .45s ease}
+@keyframes coughPulse{0%{transform:scale(1)}35%{transform:scale(1.04);box-shadow:0 0 28px rgba(251,113,133,.45)}100%{transform:scale(1)}}
+.ov-top{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.7)}
+.ov-count{font-size:clamp(2.8rem,8vw,4.2rem);font-weight:900;letter-spacing:-.05em;line-height:1;margin:2px 0 4px}
+.ov-meta{display:flex;flex-wrap:wrap;gap:10px 14px;font-size:12px;font-weight:700;color:rgba(255,255,255,.75)}.ov-meta b{color:#fff}
+.ov-hint{margin-top:8px;font-size:11px;color:rgba(255,255,255,.55);font-weight:600}
+
+</style>
 </head>
 <body>
-  <div id="app"></div>
-  <div class="toast" id="toast"></div>
-  <script>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+<script>
+
 (function () {
-  const STORE = "cough-counter-v1";
+  var STORE = 'cough-counter-v2';
+  var SYNC_BASE = 'https://jsonblob.com/api/jsonBlob';
+  var POLL_MS = 450;
+
+  var state = {
+    mode: 'control',
+    room: '',
+    count: 0,
+    sensitivity: 55,
+    cooldown: 1400,
+    auto: false,
+    label: 'COUGHS',
+    sessionStart: Math.floor(Date.now() / 1000),
+    updatedAt: 0,
+    source: 'local'
+  };
+
+  var audio = {
+    stream: null, ctx: null, analyser: null, data: null,
+    raf: 0, level: 0, lastCoughAt: 0, listening: false, error: ''
+  };
+
+  var logLines = [];
+  var tickTimer = 0;
+  var pollTimer = 0;
+  var publishTimer = 0;
+  var syncStatus = 'off';
+  var lastFlash = 0;
+  var applyingRemote = false;
 
   function toast(msg) {
-    const el = document.getElementById("toast");
+    var el = document.getElementById('toast');
     if (!el) return;
     el.textContent = msg;
-    el.classList.add("show");
+    el.classList.add('show');
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { el.classList.remove("show"); }, 1600);
-  }
-
-  function loadState() {
-    try {
-      return JSON.parse(localStorage.getItem(STORE) || "{}") || {};
-    } catch (e) {
-      return {};
-    }
-  }
-  function saveState(partial) {
-    const next = Object.assign(loadState(), partial, { updatedAt: Date.now() });
-    try { localStorage.setItem(STORE, JSON.stringify(next)); } catch (e) {}
-    try {
-      localStorage.setItem(STORE + ":tick", String(Date.now()));
-    } catch (e) {}
-    return next;
-  }
-
-  function getParams() {
-    const p = new URLSearchParams(location.search);
-    const mode = p.get("mode") === "overlay" ? "overlay" : "control";
-    const stored = loadState();
-    let count = parseInt(p.get("count") || "", 10);
-    if (!Number.isFinite(count)) count = Number.isFinite(stored.count) ? stored.count : 0;
-    count = Math.max(0, Math.floor(count));
-
-    let sensitivity = parseInt(p.get("sensitivity") || p.get("sens") || "", 10);
-    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(stored.sensitivity) ? stored.sensitivity : 55;
-    sensitivity = Math.min(95, Math.max(15, sensitivity));
-
-    let cooldown = parseInt(p.get("cooldown") || "", 10);
-    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(stored.cooldown) ? stored.cooldown : 1400;
-    cooldown = Math.min(4000, Math.max(500, cooldown));
-
-    let auto = p.get("auto");
-    if (auto == null) auto = stored.auto ? "1" : "0";
-    auto = auto === "1" || auto === "true";
-
-    let compact = p.get("compact") === "1";
-    let label = (p.get("label") || stored.label || "COUGHS").trim().slice(0, 18) || "COUGHS";
-
-    let sessionStart = parseInt(p.get("sessionStart") || "", 10);
-    if (!Number.isFinite(sessionStart) || sessionStart < 1000000000) {
-      sessionStart = Number.isFinite(stored.sessionStart) ? stored.sessionStart : Math.floor(Date.now() / 1000);
-    }
-
-    return { mode, count, sensitivity, cooldown, auto, compact, label, sessionStart };
-  }
-
-  function setParams(patch) {
-    const cur = getParams();
-    const next = Object.assign({}, cur, patch || {});
-    saveState({
-      count: next.count,
-      sensitivity: next.sensitivity,
-      cooldown: next.cooldown,
-      auto: !!next.auto,
-      label: next.label,
-      sessionStart: next.sessionStart,
-    });
-    const u = new URL(location.href);
-    if (next.mode === "overlay") u.searchParams.set("mode", "overlay");
-    else u.searchParams.delete("mode");
-    u.searchParams.set("count", String(next.count));
-    u.searchParams.set("sensitivity", String(next.sensitivity));
-    u.searchParams.set("cooldown", String(next.cooldown));
-    u.searchParams.set("auto", next.auto ? "1" : "0");
-    u.searchParams.set("label", next.label);
-    u.searchParams.set("sessionStart", String(next.sessionStart));
-    if (next.compact) u.searchParams.set("compact", "1");
-    else u.searchParams.delete("compact");
-    history.replaceState(null, "", u);
-    render();
-  }
-
-  function formatDuration(ms) {
-    const s = Math.max(0, Math.floor(ms / 1000));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
-  }
-
-  function coughsPerHour(count, sessionStart) {
-    const hours = Math.max(1 / 60, (Date.now() / 1000 - sessionStart) / 3600);
-    return (count / hours).toFixed(1);
-  }
-
-  // -------- Mic / cough detect --------
-  let audio = {
-    stream: null,
-    ctx: null,
-    analyser: null,
-    data: null,
-    raf: 0,
-    level: 0,
-    lastCoughAt: 0,
-    armed: false,
-    listening: false,
-    error: "",
-  };
-  let logLines = [];
-  let tickTimer = 0;
-  let flashUntil = 0;
-
-  function pushLog(msg) {
-    const t = new Date().toLocaleTimeString();
-    logLines.unshift(t + "  " + msg);
-    if (logLines.length > 40) logLines.pop();
-    const box = document.getElementById("eventLog");
-    if (box) box.innerHTML = logLines.map(function (l) { return "<div>" + escapeHtml(l) + "</div>"; }).join("");
+    toast._t = setTimeout(function () { el.classList.remove('show'); }, 1600);
   }
 
   function escapeHtml(s) {
@@ -342,13 +119,250 @@
       .replace(/"/g, '&' + 'quot;');
   }
 
+  function loadLocal() {
+    try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; }
+    catch (e) { return {}; }
+  }
+  function saveLocal() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({
+        room: state.room,
+        count: state.count,
+        sensitivity: state.sensitivity,
+        cooldown: state.cooldown,
+        auto: state.auto,
+        label: state.label,
+        sessionStart: state.sessionStart,
+        updatedAt: state.updatedAt
+      }));
+    } catch (e) {}
+  }
+
+  function readUrlIntoState() {
+    var p = new URLSearchParams(location.search);
+    var local = loadLocal();
+    state.mode = p.get('mode') === 'overlay' ? 'overlay' : 'control';
+    state.room = (p.get('room') || local.room || '').trim();
+
+    var count = parseInt(p.get('count') || '', 10);
+    if (!Number.isFinite(count)) count = Number.isFinite(local.count) ? local.count : 0;
+    state.count = Math.max(0, Math.floor(count));
+
+    var sensitivity = parseInt(p.get('sensitivity') || p.get('sens') || '', 10);
+    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(local.sensitivity) ? local.sensitivity : 55;
+    state.sensitivity = Math.min(95, Math.max(15, sensitivity));
+
+    var cooldown = parseInt(p.get('cooldown') || '', 10);
+    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(local.cooldown) ? local.cooldown : 1400;
+    state.cooldown = Math.min(4000, Math.max(500, cooldown));
+
+    var auto = p.get('auto');
+    if (auto == null) state.auto = !!local.auto;
+    else state.auto = auto === '1' || auto === 'true';
+
+    state.label = (p.get('label') || local.label || 'COUGHS').trim().slice(0, 18) || 'COUGHS';
+
+    var sessionStart = parseInt(p.get('sessionStart') || '', 10);
+    if (!Number.isFinite(sessionStart) || sessionStart < 1000000000) {
+      sessionStart = Number.isFinite(local.sessionStart) ? local.sessionStart : Math.floor(Date.now() / 1000);
+    }
+    state.sessionStart = sessionStart;
+    state.updatedAt = Number(local.updatedAt) || 0;
+  }
+
+  function writeUrl() {
+    var u = new URL(location.href);
+    if (state.mode === 'overlay') u.searchParams.set('mode', 'overlay');
+    else u.searchParams.delete('mode');
+    if (state.room) u.searchParams.set('room', state.room);
+    else u.searchParams.delete('room');
+    u.searchParams.set('count', String(state.count));
+    u.searchParams.set('sensitivity', String(state.sensitivity));
+    u.searchParams.set('cooldown', String(state.cooldown));
+    u.searchParams.set('auto', state.auto ? '1' : '0');
+    u.searchParams.set('label', state.label);
+    u.searchParams.set('sessionStart', String(state.sessionStart));
+    history.replaceState(null, '', u);
+    saveLocal();
+  }
+
+  function formatDuration(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = s % 60;
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+  }
+
+  function coughsPerHour(count, sessionStart) {
+    var hours = Math.max(1 / 60, (Date.now() / 1000 - sessionStart) / 3600);
+    return (count / hours).toFixed(1);
+  }
+
+  function pushLog(msg) {
+    var t = new Date().toLocaleTimeString();
+    logLines.unshift(t + '  ' + msg);
+    if (logLines.length > 50) logLines.pop();
+    var box = document.getElementById('eventLog');
+    if (box) {
+      box.innerHTML = logLines.map(function (l) {
+        return '<div>' + escapeHtml(l) + '</div>';
+      }).join('');
+    }
+  }
+
+  function payload() {
+    return {
+      count: state.count,
+      sensitivity: state.sensitivity,
+      cooldown: state.cooldown,
+      auto: state.auto,
+      label: state.label,
+      sessionStart: state.sessionStart,
+      updatedAt: state.updatedAt,
+      source: state.source
+    };
+  }
+
+  async function createRoom() {
+    syncStatus = 'publishing';
+    updateSyncPill();
+    try {
+      state.updatedAt = Date.now();
+      state.source = 'control';
+      var res = await fetch(SYNC_BASE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload())
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var loc = res.headers.get('Location') || res.headers.get('location') || '';
+      var id = res.headers.get('X-jsonblob-id') || '';
+      if (!id && loc) id = loc.split('/').pop();
+      if (!id && res.url && res.url.indexOf('/jsonBlob/') >= 0) id = res.url.split('/').pop();
+      if (!id) throw new Error('No room id returned');
+      state.room = id;
+      writeUrl();
+      syncStatus = 'ok';
+      pushLog('Live room created');
+      toast('Live room ready');
+      startPolling();
+      render();
+      return id;
+    } catch (err) {
+      syncStatus = 'error';
+      pushLog('Room create failed: ' + ((err && err.message) || err));
+      toast('Could not create live room');
+      updateSyncPill();
+      return '';
+    }
+  }
+
+  async function publish(reason) {
+    if (!state.room || applyingRemote) return;
+    syncStatus = 'publishing';
+    updateSyncPill();
+    try {
+      state.updatedAt = Date.now();
+      var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload())
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      syncStatus = 'ok';
+      if (reason) pushLog('Synced (' + reason + ') count=' + state.count);
+    } catch (err) {
+      syncStatus = 'error';
+      pushLog('Sync publish failed: ' + ((err && err.message) || err));
+    }
+    updateSyncPill();
+    var urlBox = document.getElementById('urlBox');
+    if (urlBox) urlBox.value = obsUrl();
+  }
+
+  function schedulePublish(reason) {
+    if (!state.room) return;
+    clearTimeout(publishTimer);
+    publishTimer = setTimeout(function () { publish(reason || 'update'); }, 80);
+  }
+
+  async function pullRemote() {
+    if (!state.room) return;
+    try {
+      var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store'
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      syncStatus = 'ok';
+      updateSyncPill();
+      if (!data || typeof data !== 'object') return;
+
+      var remoteAt = Number(data.updatedAt) || 0;
+      if (remoteAt && remoteAt <= state.updatedAt) return;
+
+      var prev = state.count;
+      applyingRemote = true;
+      if (Number.isFinite(data.count)) state.count = Math.max(0, Math.floor(data.count));
+      if (Number.isFinite(data.sensitivity)) state.sensitivity = Math.min(95, Math.max(15, data.sensitivity));
+      if (Number.isFinite(data.cooldown)) state.cooldown = Math.min(4000, Math.max(500, data.cooldown));
+      if (typeof data.auto === 'boolean') state.auto = data.auto;
+      if (data.label) state.label = String(data.label).slice(0, 18);
+      if (Number.isFinite(data.sessionStart) && data.sessionStart > 1000000000) state.sessionStart = data.sessionStart;
+      state.updatedAt = remoteAt || Date.now();
+      writeUrl();
+      applyingRemote = false;
+
+      if (state.count !== prev) {
+        lastFlash = Date.now();
+        pushLog('Remote update → ' + state.count + (data.source ? ' (' + data.source + ')' : ''));
+      }
+      paintLiveNumbers();
+      if (state.mode === 'overlay') renderOverlay();
+    } catch (err) {
+      syncStatus = 'error';
+      updateSyncPill();
+    }
+  }
+
+  function startPolling() {
+    clearInterval(pollTimer);
+    if (!state.room) return;
+    pollTimer = setInterval(pullRemote, POLL_MS);
+    pullRemote();
+  }
+
+  function updateSyncPill() {
+    var el = document.getElementById('syncPill');
+    if (!el) return;
+    if (!state.room) {
+      el.textContent = 'Sync off';
+      el.className = 'status-pill';
+      return;
+    }
+    if (syncStatus === 'ok') {
+      el.textContent = 'Live sync';
+      el.className = 'status-pill sync';
+    } else if (syncStatus === 'publishing') {
+      el.textContent = 'Syncing…';
+      el.className = 'status-pill sync';
+    } else if (syncStatus === 'error') {
+      el.textContent = 'Sync error';
+      el.className = 'status-pill hot';
+    } else {
+      el.textContent = 'Room ready';
+      el.className = 'status-pill sync';
+    }
+  }
+
   function stopMic() {
     if (audio.raf) cancelAnimationFrame(audio.raf);
     audio.raf = 0;
-    if (audio.stream) {
-      audio.stream.getTracks().forEach(function (t) { t.stop(); });
-    }
-    if (audio.ctx && audio.ctx.state !== "closed") {
+    if (audio.stream) audio.stream.getTracks().forEach(function (t) { t.stop(); });
+    if (audio.ctx && audio.ctx.state !== 'closed') {
       try { audio.ctx.close(); } catch (e) {}
     }
     audio.stream = null;
@@ -360,20 +374,16 @@
   }
 
   async function startMic() {
-    audio.error = "";
+    audio.error = '';
     try {
       stopMic();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
+      var stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
       });
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var source = ctx.createMediaStreamSource(stream);
+      var analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.75;
       source.connect(analyser);
@@ -382,15 +392,14 @@
       audio.analyser = analyser;
       audio.data = new Uint8Array(analyser.frequencyBinCount);
       audio.listening = true;
-      audio.armed = true;
-      pushLog("Mic enabled");
+      pushLog('Mic enabled');
       loopAudio();
       render();
       return true;
     } catch (err) {
-      audio.error = (err && err.message) || "Mic permission denied";
+      audio.error = (err && err.message) || 'Mic permission denied';
       audio.listening = false;
-      pushLog("Mic failed: " + audio.error);
+      pushLog('Mic failed: ' + audio.error);
       render();
       return false;
     }
@@ -399,15 +408,13 @@
   function loopAudio() {
     if (!audio.analyser || !audio.data) return;
     audio.analyser.getByteFrequencyData(audio.data);
-    const data = audio.data;
-    const sampleRate = audio.ctx.sampleRate || 48000;
-    const binHz = sampleRate / (audio.analyser.fftSize || 2048);
-
-    // Bands: cough energy often mid (400–3500Hz), not pure sub bass
-    let mid = 0, midN = 0, high = 0, highN = 0, low = 0, lowN = 0;
-    for (let i = 0; i < data.length; i++) {
-      const hz = i * binHz;
-      const v = data[i];
+    var data = audio.data;
+    var sampleRate = audio.ctx.sampleRate || 48000;
+    var binHz = sampleRate / (audio.analyser.fftSize || 2048);
+    var mid = 0, midN = 0, high = 0, highN = 0, low = 0, lowN = 0, i, hz, v;
+    for (i = 0; i < data.length; i++) {
+      hz = i * binHz;
+      v = data[i];
       if (hz < 200) { low += v; lowN++; }
       else if (hz < 3500) { mid += v; midN++; }
       else if (hz < 8000) { high += v; highN++; }
@@ -415,318 +422,334 @@
     mid = midN ? mid / midN : 0;
     high = highN ? high / highN : 0;
     low = lowN ? low / lowN : 0;
-
-    // 0–100 level from mid emphasis
-    const raw = mid * 0.75 + high * 0.25 - low * 0.15;
+    var raw = mid * 0.75 + high * 0.25 - low * 0.15;
     audio.level = Math.max(0, Math.min(100, (raw / 255) * 140));
 
-    const p = getParams();
-    if (p.auto && audio.armed && audio.listening) {
-      const threshold = p.sensitivity; // higher = harder to trigger? 
-      // UX: higher sensitivity slider = MORE sensitive (easier to trigger)
-      // so threshold is inverted: trigger when level > (100 - sensitivity*0.7)-ish
-      const triggerAt = 100 - p.sensitivity * 0.7; // sens 55 → trigger ~61.5? wait that's wrong
-      // Better: sensitivity 15 = hard (need level 70+), sensitivity 95 = easy (need level 20+)
-      const need = 88 - (p.sensitivity / 100) * 68; // 15→~78, 55→~50, 95→~23
-      const now = Date.now();
-      const spectralOk = mid > low * 0.9 && mid > 18;
-      if (audio.level >= need && spectralOk && now - audio.lastCoughAt >= p.cooldown) {
+    if (state.auto && audio.listening) {
+      var need = 88 - (state.sensitivity / 100) * 68;
+      var now = Date.now();
+      var spectralOk = mid > low * 0.9 && mid > 18;
+      if (audio.level >= need && spectralOk && now - audio.lastCoughAt >= state.cooldown) {
         audio.lastCoughAt = now;
-        registerCough("auto");
+        registerCough('auto');
       }
     }
 
-    const fill = document.getElementById("levelFill");
-    if (fill) fill.style.width = audio.level.toFixed(1) + "%";
-    const fillOv = document.getElementById("ovLevelFill");
-    if (fillOv) fillOv.style.width = audio.level.toFixed(1) + "%";
-    const lvl = document.getElementById("levelVal");
-    if (lvl) lvl.textContent = Math.round(audio.level) + "%";
+    var fill = document.getElementById('levelFill');
+    if (fill) fill.style.width = audio.level.toFixed(1) + '%';
+    var lvl = document.getElementById('levelVal');
+    if (lvl) lvl.textContent = Math.round(audio.level) + '%';
 
     audio.raf = requestAnimationFrame(loopAudio);
   }
 
   function registerCough(source) {
-    const p = getParams();
-    const count = p.count + 1;
-    flashUntil = Date.now() + 450;
-    saveState({ count: count });
-    pushLog((source === "auto" ? "Auto" : "Manual") + " cough → " + count);
-    // update URL count without full remount when possible
-    const u = new URL(location.href);
-    u.searchParams.set("count", String(count));
-    history.replaceState(null, "", u);
-    const num = document.getElementById("countNum");
-    if (num) num.textContent = String(count);
-    const ov = document.getElementById("ovCount");
-    if (ov) ov.textContent = String(count);
-    const cph = document.getElementById("cphVal");
-    if (cph) cph.textContent = coughsPerHour(count, p.sessionStart);
-    const cph2 = document.getElementById("ovCph");
-    if (cph2) cph2.textContent = coughsPerHour(count, p.sessionStart);
-    const card = document.querySelector(".ov-card");
+    state.count += 1;
+    state.source = source === 'auto' ? 'auto' : 'manual';
+    state.updatedAt = Date.now();
+    lastFlash = Date.now();
+    writeUrl();
+    pushLog((source === 'auto' ? 'Auto' : 'Manual') + ' cough → ' + state.count);
+    paintLiveNumbers();
+    var card = document.querySelector('.ov-card');
     if (card) {
-      card.classList.remove("flash");
+      card.classList.remove('flash');
       void card.offsetWidth;
-      card.classList.add("flash");
+      card.classList.add('flash');
     }
-    // keep storage in sync for multi-tab control
-    saveState({ count: count, sessionStart: p.sessionStart, sensitivity: p.sensitivity, cooldown: p.cooldown, auto: p.auto, label: p.label });
+    schedulePublish(source === 'auto' ? 'auto-cough' : 'manual-cough');
   }
 
   function adjustCount(delta) {
-    const p = getParams();
-    const count = Math.max(0, p.count + delta);
-    setParams({ count: count });
-    pushLog((delta > 0 ? "Manual +" : "Manual ") + delta + " → " + count);
+    state.count = Math.max(0, state.count + delta);
+    state.source = 'manual';
+    state.updatedAt = Date.now();
+    writeUrl();
+    pushLog((delta > 0 ? 'Manual +' : 'Manual ') + delta + ' → ' + state.count);
+    paintLiveNumbers();
+    schedulePublish('adjust');
+    if (!document.getElementById('countNum')) render();
+  }
+
+  function paintLiveNumbers() {
+    var n = document.getElementById('countNum');
+    if (n) n.textContent = String(state.count);
+    var ov = document.getElementById('ovCount');
+    if (ov) ov.textContent = String(state.count);
+    var cph = coughsPerHour(state.count, state.sessionStart);
+    var a = document.getElementById('cphVal');
+    if (a) a.textContent = cph;
+    var b = document.getElementById('ovCph');
+    if (b) b.textContent = cph;
+    var urlBox = document.getElementById('urlBox');
+    if (urlBox) urlBox.value = obsUrl();
   }
 
   function obsUrl() {
-    const p = getParams();
-    const u = new URL(location.origin + location.pathname);
-    u.searchParams.set("mode", "overlay");
-    u.searchParams.set("count", String(p.count));
-    u.searchParams.set("sensitivity", String(p.sensitivity));
-    u.searchParams.set("cooldown", String(p.cooldown));
-    u.searchParams.set("auto", p.auto ? "1" : "0");
-    u.searchParams.set("label", p.label);
-    u.searchParams.set("sessionStart", String(p.sessionStart));
+    var u = new URL(location.origin + location.pathname);
+    u.searchParams.set('mode', 'overlay');
+    if (state.room) u.searchParams.set('room', state.room);
+    u.searchParams.set('count', String(state.count));
+    u.searchParams.set('sensitivity', String(state.sensitivity));
+    u.searchParams.set('cooldown', String(state.cooldown));
+    u.searchParams.set('auto', '0');
+    u.searchParams.set('label', state.label);
+    u.searchParams.set('sessionStart', String(state.sessionStart));
     return u.toString();
   }
 
-  function renderOverlay(p) {
-    document.body.className = "overlay-mode";
-    document.documentElement.style.background = "transparent";
-    const app = document.getElementById("app");
-    const elapsed = formatDuration(Date.now() - p.sessionStart * 1000);
-    const micLabel = audio.listening ? "MIC ON" : "MIC OFF";
+  function renderOverlay() {
+    document.body.className = 'overlay-mode';
+    document.documentElement.style.background = 'transparent';
+    var app = document.getElementById('app');
+    var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
+    var syncTxt = state.room ? (syncStatus === 'ok' ? 'LIVE' : syncStatus === 'error' ? 'SYNC?' : 'SYNC') : 'LOCAL';
+    var flash = (Date.now() - lastFlash < 450) ? ' flash' : '';
     app.innerHTML =
-      '<div class="ov"><div class="ov-card' + (Date.now() < flashUntil ? " flash" : "") + '">' +
-      '<div class="ov-top"><span>' + escapeHtml(p.label) + '</span><span>' + micLabel + (p.auto ? " · AUTO" : " · MANUAL") + "</span></div>" +
-      '<div class="ov-count" id="ovCount">' + p.count + "</div>" +
-      '<div class="ov-meta"><span>Session <b id="ovElapsed">' + elapsed + "</b></span><span>Per hour <b id=\"ovCph\">" + coughsPerHour(p.count, p.sessionStart) + "</b></span></div>" +
-      (p.auto
-        ? '<div class="ov-bar"><i id="ovLevelFill" style="width:' + audio.level.toFixed(1) + '%"></i></div>' +
-          (audio.listening
-            ? ""
-            : '<div class="ov-hint">Interact with this browser source → Enable mic</div>')
-        : "") +
-      "</div></div>";
+      '<div class="ov"><div class="ov-card' + flash + '">' +
+      '<div class="ov-top"><span>' + escapeHtml(state.label) + '</span><span>' + syncTxt + '</span></div>' +
+      '<div class="ov-count" id="ovCount">' + state.count + '</div>' +
+      '<div class="ov-meta"><span>Session <b id="ovElapsed">' + elapsed + '</b></span>' +
+      '<span>Per hour <b id="ovCph">' + coughsPerHour(state.count, state.sessionStart) + '</b></span></div>' +
+      (state.room ? '' : '<div class="ov-hint">No room in URL — create Live room on control page</div>') +
+      '</div></div>';
   }
 
-  function renderControl(p) {
-    document.body.className = "";
-    document.documentElement.style.background = "";
-    const app = document.getElementById("app");
-    const elapsed = formatDuration(Date.now() - p.sessionStart * 1000);
-    const need = Math.round(88 - (p.sensitivity / 100) * 68);
+  function renderControl() {
+    document.body.className = '';
+    document.documentElement.style.background = '';
+    var app = document.getElementById('app');
+    var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
+    var need = Math.round(88 - (state.sensitivity / 100) * 68);
+    var roomBox = state.room
+      ? ('<div class="okbox"><strong>Room active.</strong> Mic/manual counts on this page update OBS within ~0.5s.<br>Room id: <span class="room-code">' +
+         escapeHtml(state.room) +
+         '</span><br><span class="hint">Rooms last about a day — make a new one each stream if needed.</span></div>')
+      : '<p class="hint" style="margin-top:0">Create a room, paste the overlay URL into OBS, keep this page open with the mic on.</p>';
+
     app.innerHTML =
       '<div class="wrap">' +
       '<header class="app-head"><div class="brand">' +
-      "<h1>Cough Counter</h1>" +
-      "<p>Manual tally + optional mic auto-detect for OBS. Auto is helpful, not perfect — use <strong>−1</strong> when it false-triggers.</p>" +
-      '</div><span class="badge">Manual · Mic auto · OBS</span></header>' +
+      '<h1>Cough Counter</h1>' +
+      '<p>Enable mic here. Create a <strong>Live room</strong> so the OBS overlay updates when coughs are counted.</p>' +
+      '</div><span class="badge">Manual · Mic · Live sync</span></header>' +
+
+      '<section class="card" style="margin-bottom:14px">' +
+      '<h2>Live room (control → OBS)</h2>' +
+      roomBox +
+      '<div class="row">' +
+      '<button type="button" class="btn accent" id="btnRoom">' + (state.room ? 'Create new room' : 'Create live room') + '</button>' +
+      '<button type="button" class="btn ghost" id="btnCopy">Copy overlay URL</button>' +
+      '<button type="button" class="btn ghost" id="btnOpenOv">Open overlay</button>' +
+      '<span class="status-pill" id="syncPill">Sync off</span>' +
+      '</div>' +
+      '<label class="field" style="margin-top:10px">OBS overlay URL<textarea class="url-box" id="urlBox" readonly>' +
+      escapeHtml(obsUrl()) +
+      '</textarea></label>' +
+      '<p class="hint">OBS Browser Source · Width 500 · Height 320 · Transparent · URL must include room=</p>' +
+      '</section>' +
+
       '<div class="grid">' +
       '<section class="card">' +
-      "<h2>Counter</h2>" +
-      '<div class="big-count"><div class="label">' + escapeHtml(p.label) + '</div><div class="num" id="countNum">' + p.count + "</div></div>" +
+      '<h2>Counter</h2>' +
+      '<div class="big-count"><div class="label">' + escapeHtml(state.label) + '</div><div class="num" id="countNum">' + state.count + '</div></div>' +
       '<div class="row" style="justify-content:center">' +
       '<button type="button" class="btn danger" id="btnMinus">−1</button>' +
       '<button type="button" class="btn ok" id="btnPlus">+1 Cough</button>' +
       '<button type="button" class="btn ghost" id="btnReset">Reset</button>' +
-      "</div>" +
+      '</div>' +
       '<div class="stat-grid">' +
-      '<div class="stat"><div class="k">Session</div><div class="v" id="elapsedVal">' + elapsed + "</div></div>" +
-      '<div class="stat"><div class="k">Per hour</div><div class="v" id="cphVal">' + coughsPerHour(p.count, p.sessionStart) + "</div></div>" +
-      '<div class="stat"><div class="k">Last trigger</div><div class="v" style="font-size:1.1rem">' + (audio.lastCoughAt ? new Date(audio.lastCoughAt).toLocaleTimeString() : "—") + "</div></div>" +
-      "</div>" +
+      '<div class="stat"><div class="k">Session</div><div class="v" id="elapsedVal">' + elapsed + '</div></div>' +
+      '<div class="stat"><div class="k">Per hour</div><div class="v" id="cphVal">' + coughsPerHour(state.count, state.sessionStart) + '</div></div>' +
+      '<div class="stat"><div class="k">Last local</div><div class="v" style="font-size:1.05rem">' +
+      (audio.lastCoughAt ? new Date(audio.lastCoughAt).toLocaleTimeString() : '—') +
+      '</div></div></div>' +
       '<div class="row" style="margin-top:12px">' +
-      '<span class="status-pill' + (audio.listening ? " on" : "") + '" id="micPill">' + (audio.listening ? "Mic live" : "Mic off") + "</span>" +
-      '<span class="status-pill' + (p.auto ? " hot" : "") + '">' + (p.auto ? "Auto on" : "Auto off") + "</span>" +
-      '<span class="hint">Hotkeys: <strong>Space / +</strong> cough · <strong>−</strong> undo · <strong>R</strong> reset</span>' +
-      "</div>" +
-      "</section>" +
+      '<span class="status-pill' + (audio.listening ? ' on' : '') + '">' + (audio.listening ? 'Mic live' : 'Mic off') + '</span>' +
+      '<span class="status-pill' + (state.auto ? ' hot' : '') + '">' + (state.auto ? 'Auto on' : 'Auto off') + '</span>' +
+      '<span class="hint">Hotkeys: Space/+ cough · − undo · R reset</span>' +
+      '</div></section>' +
 
       '<section class="card">' +
-      "<h2>Mic auto-detect</h2>" +
-      '<label class="toggle"><input type="checkbox" id="autoToggle"' + (p.auto ? " checked" : "") + " /> Enable auto cough detection</label>" +
+      '<h2>Mic auto-detect (this page)</h2>' +
+      '<label class="toggle"><input type="checkbox" id="autoToggle"' + (state.auto ? ' checked' : '') + ' /> Enable auto cough detection</label>' +
       '<div class="row" style="margin-top:10px">' +
-      '<button type="button" class="btn accent" id="btnMic">' + (audio.listening ? "Stop mic" : "Enable mic") + "</button>" +
-      '<button type="button" class="btn ghost sm" id="btnTest">Force +1 test</button>' +
-      "</div>" +
-      '<div class="meter-wrap">' +
+      '<button type="button" class="btn accent" id="btnMic">' + (audio.listening ? 'Stop mic' : 'Enable mic') + '</button>' +
+      '<button type="button" class="btn ghost sm" id="btnTest">Force +1</button>' +
+      '</div>' +
+      '<div class="meter-wrap" style="margin-top:10px">' +
       '<div class="meter"><i id="levelFill" style="width:' + audio.level.toFixed(1) + '%"></i></div>' +
-      '<div class="meter-labels"><span>Level <span id="levelVal">' + Math.round(audio.level) + '%</span></span><span>Trigger ≈ ' + need + "%+</span></div>" +
-      "</div>" +
-      '<div class="row">' +
-      '<label class="field">Sensitivity (higher = more sensitive)<input id="sens" type="range" min="15" max="95" value="' + p.sensitivity + '" /></label>' +
-      "</div>" +
-      '<div class="row">' +
-      '<label class="field">Cooldown ms<input id="cool" type="range" min="500" max="4000" step="100" value="' + p.cooldown + '" /></label>' +
-      "</div>" +
-      '<p class="hint" style="margin:8px 0 0">Cough-ish bursts in the mid band above the trigger line count once per cooldown. Speech/laughs can false-trigger — lower sensitivity or hit −1.</p>' +
-      (audio.error ? '<div class="warn">Mic error: ' + escapeHtml(audio.error) + "</div>" : "") +
-      '<div class="warn"><strong>OBS note:</strong> Auto works best if this page (or the overlay) has mic permission. In OBS: right-click Browser Source → <em>Interact</em> → Enable mic. Control page and OBS do not share live state — copy a fresh overlay URL after big setting changes, or run auto in the overlay itself.</div>' +
-      "</section>" +
-      "</div>" +
+      '<div class="meter-labels"><span>Level <span id="levelVal">' + Math.round(audio.level) + '%</span></span><span>Trigger ≈ ' + need + '%+</span></div>' +
+      '</div>' +
+      '<div class="row"><label class="field">Sensitivity (higher = more sensitive)<input id="sens" type="range" min="15" max="95" value="' + state.sensitivity + '" /></label></div>' +
+      '<div class="row"><label class="field">Cooldown ms<input id="cool" type="range" min="500" max="4000" step="100" value="' + state.cooldown + '" /></label></div>' +
+      '<p class="hint" style="margin:8px 0 0">Auto is approximate. False triggers: hit −1 (syncs to OBS too).</p>' +
+      (audio.error ? ('<div class="warn">Mic error: ' + escapeHtml(audio.error) + '</div>') : '') +
+      '</section></div>' +
 
       '<section class="card" style="margin-top:14px">' +
-      "<h2>OBS overlay</h2>" +
+      '<h2>Session / label</h2>' +
       '<div class="row">' +
-      '<label class="field">Label<input id="labelInput" type="text" maxlength="18" value="' + escapeHtml(p.label) + '" /></label>' +
-      '<label class="field">Session start (unix sec)<input id="sessionInput" type="number" value="' + p.sessionStart + '" /></label>' +
-      "</div>" +
-      '<div class="row">' +
-      '<button type="button" class="btn" id="btnNewSession">New session (keep count?)</button>' +
-      '<button type="button" class="btn ghost" id="btnNewSessionReset">New session + reset count</button>' +
-      '<button type="button" class="btn ghost" id="btnCopy">Copy overlay URL</button>' +
-      '<button type="button" class="btn ghost" id="btnOpenOv">Open overlay</button>' +
-      "</div>" +
-      '<label class="field" style="margin-top:10px">Overlay URL<textarea class="url-box" id="urlBox" readonly>' + escapeHtml(obsUrl()) + "</textarea></label>" +
-      '<p class="hint">OBS: Browser Source · Width 500 · Height 320 · Transparent background · paste overlay URL</p>' +
-      "</section>" +
+      '<label class="field">Label<input id="labelInput" type="text" maxlength="18" value="' + escapeHtml(state.label) + '" /></label>' +
+      '<button type="button" class="btn ghost" id="btnNewSession">New session timer</button>' +
+      '<button type="button" class="btn ghost" id="btnNewSessionReset">New session + reset</button>' +
+      '</div></section>' +
 
       '<section class="card" style="margin-top:14px">' +
-      "<h2>Event log</h2>" +
-      '<div class="log" id="eventLog">' + (logLines.length ? logLines.map(function (l) { return "<div>" + escapeHtml(l) + "</div>"; }).join("") : "<div>No events yet</div>") + "</div>" +
-      "</section>" +
+      '<h2>Event log</h2>' +
+      '<div class="log" id="eventLog">' +
+      (logLines.length ? logLines.map(function (l) { return '<div>' + escapeHtml(l) + '</div>'; }).join('') : '<div>No events yet</div>') +
+      '</div></section>' +
+      '<footer class="note">Client-side mic · Live room via JSONBlob (~24h) · <a href="https://github.com/FranklinElliott/cough-counter">GitHub</a></footer>' +
+      '</div>';
 
-      '<footer class="note">Client-side only · <a href="https://github.com/FranklinElliott/cough-counter">GitHub</a> · Auto-detect is approximate</footer>' +
-      "</div>";
-
-    wireControl(p);
+    wireControl();
+    updateSyncPill();
   }
 
-  function wireControl(p) {
-    document.getElementById("btnPlus").onclick = function () { adjustCount(1); };
-    document.getElementById("btnMinus").onclick = function () { adjustCount(-1); };
-    document.getElementById("btnReset").onclick = function () {
-      if (confirm("Reset cough count to 0?")) setParams({ count: 0 });
+  function wireControl() {
+    document.getElementById('btnPlus').onclick = function () { adjustCount(1); };
+    document.getElementById('btnMinus').onclick = function () { adjustCount(-1); };
+    document.getElementById('btnReset').onclick = function () {
+      if (!confirm('Reset cough count to 0?')) return;
+      state.count = 0;
+      state.source = 'manual';
+      state.updatedAt = Date.now();
+      writeUrl();
+      paintLiveNumbers();
+      schedulePublish('reset');
+      render();
     };
-    document.getElementById("btnTest").onclick = function () { registerCough("manual"); render(); };
-    document.getElementById("autoToggle").onchange = function (e) {
-      setParams({ auto: e.target.checked });
+    document.getElementById('btnTest').onclick = function () { registerCough('manual'); };
+    document.getElementById('autoToggle').onchange = function (e) {
+      state.auto = e.target.checked;
+      state.updatedAt = Date.now();
+      writeUrl();
+      schedulePublish('auto-toggle');
+      render();
     };
-    document.getElementById("btnMic").onclick = async function () {
+    document.getElementById('btnMic').onclick = async function () {
       if (audio.listening) {
         stopMic();
-        pushLog("Mic stopped");
+        pushLog('Mic stopped');
         render();
       } else {
+        if (!state.room) toast('Create a live room first for OBS sync');
         await startMic();
       }
     };
-    document.getElementById("sens").oninput = function (e) {
-      // live preview of threshold text without resetting mic
-      saveState({ sensitivity: parseInt(e.target.value, 10) });
-      const u = new URL(location.href);
-      u.searchParams.set("sensitivity", e.target.value);
-      history.replaceState(null, "", u);
+    document.getElementById('sens').oninput = function (e) {
+      state.sensitivity = parseInt(e.target.value, 10);
+      state.updatedAt = Date.now();
+      writeUrl();
+      schedulePublish('sensitivity');
       render();
     };
-    document.getElementById("cool").oninput = function (e) {
-      saveState({ cooldown: parseInt(e.target.value, 10) });
-      const u = new URL(location.href);
-      u.searchParams.set("cooldown", e.target.value);
-      history.replaceState(null, "", u);
+    document.getElementById('cool').oninput = function (e) {
+      state.cooldown = parseInt(e.target.value, 10);
+      state.updatedAt = Date.now();
+      writeUrl();
+      schedulePublish('cooldown');
       render();
     };
-    document.getElementById("labelInput").onchange = function (e) {
-      setParams({ label: e.target.value.trim().slice(0, 18) || "COUGHS" });
+    document.getElementById('labelInput').onchange = function (e) {
+      state.label = e.target.value.trim().slice(0, 18) || 'COUGHS';
+      state.updatedAt = Date.now();
+      writeUrl();
+      schedulePublish('label');
+      render();
     };
-    document.getElementById("sessionInput").onchange = function (e) {
-      const n = parseInt(e.target.value, 10);
-      if (Number.isFinite(n) && n > 1000000000) setParams({ sessionStart: n });
+    document.getElementById('btnNewSession').onclick = function () {
+      state.sessionStart = Math.floor(Date.now() / 1000);
+      state.updatedAt = Date.now();
+      writeUrl();
+      schedulePublish('session');
+      toast('New session timer');
+      render();
     };
-    document.getElementById("btnNewSession").onclick = function () {
-      setParams({ sessionStart: Math.floor(Date.now() / 1000) });
-      toast("New session timer");
+    document.getElementById('btnNewSessionReset').onclick = function () {
+      state.sessionStart = Math.floor(Date.now() / 1000);
+      state.count = 0;
+      state.updatedAt = Date.now();
+      writeUrl();
+      schedulePublish('session-reset');
+      toast('Session + count reset');
+      render();
     };
-    document.getElementById("btnNewSessionReset").onclick = function () {
-      setParams({ sessionStart: Math.floor(Date.now() / 1000), count: 0 });
-      toast("Session + count reset");
+    document.getElementById('btnRoom').onclick = async function () {
+      if (state.room && !confirm('Create a brand new room? Update OBS with the new overlay URL.')) return;
+      await createRoom();
     };
-    document.getElementById("btnCopy").onclick = async function () {
+    document.getElementById('btnCopy').onclick = async function () {
+      if (!state.room) { toast('Create a live room first'); return; }
       try {
         await navigator.clipboard.writeText(obsUrl());
-        toast("Overlay URL copied");
+        toast('Overlay URL copied');
       } catch (e) {
-        document.getElementById("urlBox").select();
-        toast("Copy from the box");
+        document.getElementById('urlBox').select();
+        toast('Copy from the box');
       }
     };
-    document.getElementById("btnOpenOv").onclick = function () {
-      window.open(obsUrl(), "_blank");
+    document.getElementById('btnOpenOv').onclick = function () {
+      if (!state.room) { toast('Create a live room first'); return; }
+      window.open(obsUrl(), '_blank');
     };
   }
 
   function render() {
-    const p = getParams();
-    if (p.mode === "overlay") renderOverlay(p);
-    else renderControl(p);
+    if (state.mode === 'overlay') renderOverlay();
+    else renderControl();
   }
 
-  // hotkeys (control mode)
-  window.addEventListener("keydown", function (e) {
-    if (getParams().mode === "overlay") return;
-    const tag = (e.target && e.target.tagName) || "";
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (e.code === "Space" || e.key === "+" || e.key === "=") {
+  window.addEventListener('keydown', function (e) {
+    if (state.mode === 'overlay') return;
+    var tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.code === 'Space' || e.key === '+' || e.key === '=') {
       e.preventDefault();
       adjustCount(1);
-    } else if (e.key === "-" || e.key === "_") {
+    } else if (e.key === '-' || e.key === '_') {
       e.preventDefault();
       adjustCount(-1);
-    } else if (e.key === "r" || e.key === "R") {
+    } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
-      if (confirm("Reset cough count to 0?")) setParams({ count: 0 });
+      if (confirm('Reset cough count to 0?')) {
+        state.count = 0;
+        state.updatedAt = Date.now();
+        writeUrl();
+        schedulePublish('reset');
+        render();
+      }
     }
   });
 
-  // storage sync if two control tabs
-  window.addEventListener("storage", function (e) {
-    if (e.key === STORE || e.key === STORE + ":tick") render();
-  });
-
-  // session clock
   function startTicks() {
     clearInterval(tickTimer);
     tickTimer = setInterval(function () {
-      const p = getParams();
-      const elapsed = formatDuration(Date.now() - p.sessionStart * 1000);
-      const a = document.getElementById("elapsedVal");
+      var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
+      var a = document.getElementById('elapsedVal');
       if (a) a.textContent = elapsed;
-      const b = document.getElementById("ovElapsed");
+      var b = document.getElementById('ovElapsed');
       if (b) b.textContent = elapsed;
-      const c = document.getElementById("cphVal");
-      if (c) c.textContent = coughsPerHour(p.count, p.sessionStart);
-      const d = document.getElementById("ovCph");
-      if (d) d.textContent = coughsPerHour(p.count, p.sessionStart);
+      var cph = coughsPerHour(state.count, state.sessionStart);
+      var c = document.getElementById('cphVal');
+      if (c) c.textContent = cph;
+      var d = document.getElementById('ovCph');
+      if (d) d.textContent = cph;
     }, 500);
   }
 
-  // Overlay: auto-start mic if auto=1 (user may need Interact first)
-  async function boot() {
-    const p = getParams();
-    // ensure session exists in storage
-    saveState({
-      count: p.count,
-      sensitivity: p.sensitivity,
-      cooldown: p.cooldown,
-      auto: p.auto,
-      label: p.label,
-      sessionStart: p.sessionStart,
-    });
+  function boot() {
+    readUrlIntoState();
+    writeUrl();
     render();
     startTicks();
-    if (p.mode === "overlay" && p.auto) {
-      // try mic; if blocked, hint stays on overlay
-      startMic();
-    }
+    if (state.room) startPolling();
   }
 
   boot();
 })();
-  </script>
+
+</script>
 </body>
 </html>
