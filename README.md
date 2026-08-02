@@ -105,7 +105,8 @@ https://franklinelliott.github.io/cough-counter/?mode=overlay&room=YOUR_ROOM_ID&
 - Auto-detect will never be perfect
 - Live rooms expire (~24h)
 - Control page must stay open for mic + publishing
-- If sync fails, the pill shows an error — create a new room and update OBS
+- Free sync host may **rate-limit** (429) if polled too hard — app backs off automatically; wait a few seconds or create a new room
+- If sync stays broken, create a new room and update the OBS URL
 
 ## Repo
 
