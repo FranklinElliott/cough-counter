@@ -73,6 +73,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
 
 
 
+
 (function () {
   var STORE = 'cough-counter-v3';
   // Free host rate-limits aggressive polling. We publish rarely; overlay polls slowly.
@@ -260,6 +261,28 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       el.textContent = 'Room ready';
       el.className = 'status-pill sync';
     }
+  }
+
+  
+  function endRoom() {
+    if (!state.room) {
+      toast('No active room');
+      return;
+    }
+    if (!confirm('End live room? OBS will stop receiving updates until you create a new room.')) return;
+    var old = state.room;
+    state.room = '';
+    rateLimitedUntil = 0;
+    publishInFlight = false;
+    pendingPublishReason = null;
+    syncStatus = 'off';
+    clearInterval(pollTimer);
+    pollTimer = 0;
+    clearTimeout(publishTimer);
+    writeUrl();
+    pushLog('Live room ended (' + old.slice(0, 8) + '…)');
+    toast('Room ended');
+    render();
   }
 
   async function createRoom() {
@@ -712,7 +735,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       '<h2>Live room (control → OBS)</h2>' +
       roomBox +
       '<div class="row">' +
-      '<button type="button" class="btn accent" id="btnRoom">' + (state.room ? 'Create new room' : 'Create live room') + '</button>' +
+      '<button type="button" class="btn accent" id="btnRoom">' + (state.room ? 'Create new room' : 'Create live room') + '</button>' +(state.room ? '<button type="button" class="btn danger" id="btnEndRoom">End room</button>' : '') +
       '<button type="button" class="btn ghost" id="btnCopy">Copy overlay URL</button>' +
       '<button type="button" class="btn ghost" id="btnOpenOv">Open overlay</button>' +
       '<button type="button" class="btn ghost sm" id="btnForceSync">Push count now</button>' +
@@ -852,6 +875,10 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       toast('Session + count reset');
       render();
     };
+    var endBtn = document.getElementById('btnEndRoom');
+    if (endBtn) {
+      endBtn.onclick = function () { endRoom(); };
+    }
     document.getElementById('btnRoom').onclick = async function () {
       if (state.room && !confirm('Create a brand new room? Update OBS with the new overlay URL.')) return;
       await createRoom();
@@ -933,6 +960,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   boot();
 })();
 
+  
   
   
   </script>
