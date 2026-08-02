@@ -71,6 +71,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   <div class="toast" id="toast"></div>
   <script>
 
+
 (function () {
   var STORE = 'cough-counter-v3';
   // Free host rate-limits aggressive polling. We publish rarely; overlay polls slowly.
@@ -82,8 +83,8 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     mode: 'control',
     room: '',
     count: 0,
-    sensitivity: 55,
-    cooldown: 1400,
+    sensitivity: 72,
+    cooldown: 900,
     auto: false,
     label: 'COUGHS',
     sessionStart: Math.floor(Date.now() / 1000),
@@ -92,8 +93,13 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   };
 
   var audio = {
-    stream: null, ctx: null, analyser: null, data: null,
-    raf: 0, level: 0, lastCoughAt: 0, listening: false, error: ''
+    stream: null, ctx: null, analyser: null, data: null, timeData: null,
+    raf: 0, level: 0, lastCoughAt: 0, listening: false, error: '',
+    // rolling baseline for onset detection
+    baseline: 8,
+    peak: 0,
+    aboveSince: 0,
+    debug: ''
   };
 
   var logLines = [];
@@ -155,11 +161,11 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     state.count = Math.max(0, Math.floor(count));
 
     var sensitivity = parseInt(p.get('sensitivity') || p.get('sens') || '', 10);
-    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(local.sensitivity) ? local.sensitivity : 55;
+    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(local.sensitivity) ? local.sensitivity : 72;
     state.sensitivity = Math.min(95, Math.max(15, sensitivity));
 
     var cooldown = parseInt(p.get('cooldown') || '', 10);
-    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(local.cooldown) ? local.cooldown : 1400;
+    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(local.cooldown) ? local.cooldown : 900;
     state.cooldown = Math.min(4000, Math.max(500, cooldown));
 
     var auto = p.get('auto');
@@ -457,19 +463,33 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     try {
       stopMic();
       var stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        // noiseSuppression/echoCancellation often erase short coughs — keep them off
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+          channelCount: 1
+        },
         video: false
       });
       var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') {
+        try { await ctx.resume(); } catch (e) {}
+      }
       var source = ctx.createMediaStreamSource(stream);
       var analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.75;
+      // faster response for short bursts
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.35;
       source.connect(analyser);
       audio.stream = stream;
       audio.ctx = ctx;
       audio.analyser = analyser;
       audio.data = new Uint8Array(analyser.frequencyBinCount);
+      audio.timeData = new Uint8Array(analyser.fftSize);
+      audio.baseline = 8;
+      audio.peak = 0;
+      audio.aboveSince = 0;
       audio.listening = true;
       pushLog('Mic enabled');
       loopAudio();
@@ -487,37 +507,99 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   function loopAudio() {
     if (!audio.analyser || !audio.data) return;
     audio.analyser.getByteFrequencyData(audio.data);
+    if (audio.timeData) audio.analyser.getByteTimeDomainData(audio.timeData);
+
     var data = audio.data;
     var sampleRate = audio.ctx.sampleRate || 48000;
-    var binHz = sampleRate / (audio.analyser.fftSize || 2048);
+    var binHz = sampleRate / (audio.analyser.fftSize || 1024);
+
+    // RMS from waveform (catches short bursts better than smoothed FFT alone)
+    var rms = 0;
+    if (audio.timeData) {
+      var td = audio.timeData;
+      var sum = 0;
+      for (var t = 0; t < td.length; t++) {
+        var x = (td[t] - 128) / 128;
+        sum += x * x;
+      }
+      rms = Math.sqrt(sum / td.length); // 0..~1
+    }
+
     var mid = 0, midN = 0, high = 0, highN = 0, low = 0, lowN = 0, i, hz, v;
     for (i = 0; i < data.length; i++) {
       hz = i * binHz;
       v = data[i];
-      if (hz < 200) { low += v; lowN++; }
-      else if (hz < 3500) { mid += v; midN++; }
-      else if (hz < 8000) { high += v; highN++; }
+      if (hz < 150) { low += v; lowN++; }
+      else if (hz < 4000) { mid += v; midN++; }
+      else if (hz < 9000) { high += v; highN++; }
     }
     mid = midN ? mid / midN : 0;
     high = highN ? high / highN : 0;
     low = lowN ? low / lowN : 0;
-    var raw = mid * 0.75 + high * 0.25 - low * 0.15;
-    audio.level = Math.max(0, Math.min(100, (raw / 255) * 140));
+
+    // Combined 0-100 level: waveform RMS + mid band
+    var rmsLevel = Math.min(100, rms * 220);
+    var fftLevel = Math.min(100, ((mid * 0.7 + high * 0.3) / 255) * 160);
+    var level = Math.max(rmsLevel, fftLevel * 0.85);
+    audio.level = level;
+    if (level > audio.peak) audio.peak = level;
+    // decay peak for display
+    audio.peak *= 0.98;
+
+    // Adaptive baseline (slow rise toward quiet ambient)
+    if (level < audio.baseline + 6) {
+      audio.baseline = audio.baseline * 0.98 + level * 0.02;
+    } else {
+      audio.baseline = audio.baseline * 0.9995 + Math.min(level, audio.baseline + 2) * 0.0005;
+    }
+
+    // sensitivity 15..95 → onset margin above baseline (lower margin = more sensitive)
+    // sens 95 ≈ +4 above baseline, sens 55 ≈ +10, sens 15 ≈ +18
+    var margin = 20 - (state.sensitivity / 100) * 17;
+    var triggerAt = audio.baseline + margin;
+    // also require a minimum absolute floor so silence doesn't trigger
+    var floor = 12 - (state.sensitivity / 100) * 6; // 6..12
+    var now = Date.now();
 
     if (state.auto && audio.listening) {
-      var need = 88 - (state.sensitivity / 100) * 68;
-      var now = Date.now();
-      var spectralOk = mid > low * 0.9 && mid > 18;
-      if (audio.level >= need && spectralOk && now - audio.lastCoughAt >= state.cooldown) {
-        audio.lastCoughAt = now;
-        registerCough('auto');
+      var onset = level >= triggerAt && level >= floor;
+      // cough-ish: mid energy present OR strong RMS spike (don't require strict spectral gate)
+      var spectralOk = mid > 10 || rmsLevel > triggerAt;
+      if (onset && spectralOk) {
+        if (!audio.aboveSince) audio.aboveSince = now;
+        var held = now - audio.aboveSince;
+        // short burst: 25ms–900ms above threshold (cough is brief; speech often longer)
+        if (held >= 25 && held <= 900 && now - audio.lastCoughAt >= state.cooldown) {
+          // require drop soon after — fire on peak-ish: level near recent peak
+          if (level >= audio.peak * 0.72) {
+            audio.lastCoughAt = now;
+            audio.aboveSince = 0;
+            audio.debug = 'hit L' + Math.round(level) + ' B' + Math.round(audio.baseline);
+            registerCough('auto');
+          }
+        }
+      } else {
+        // if we were above a while and drop, that trailing edge can count as a cough end
+        if (audio.aboveSince && now - audio.aboveSince >= 30 && now - audio.aboveSince <= 800) {
+          if (now - audio.lastCoughAt >= state.cooldown && audio.peak >= triggerAt) {
+            audio.lastCoughAt = now;
+            audio.debug = 'edge L' + Math.round(level) + ' P' + Math.round(audio.peak);
+            registerCough('auto');
+          }
+        }
+        audio.aboveSince = 0;
       }
+      audio.debug = 'L' + Math.round(level) + ' need≥' + Math.round(Math.max(triggerAt, floor)) + ' base' + Math.round(audio.baseline);
     }
 
     var fill = document.getElementById('levelFill');
-    if (fill) fill.style.width = audio.level.toFixed(1) + '%';
+    if (fill) fill.style.width = Math.min(100, level).toFixed(1) + '%';
     var lvl = document.getElementById('levelVal');
-    if (lvl) lvl.textContent = Math.round(audio.level) + '%';
+    if (lvl) lvl.textContent = Math.round(level) + '%';
+    var trig = document.getElementById('trigVal');
+    if (trig) trig.textContent = Math.round(Math.max(triggerAt, floor)) + '%';
+    var dbg = document.getElementById('micDebug');
+    if (dbg) dbg.textContent = audio.debug || '';
 
     audio.raf = requestAnimationFrame(loopAudio);
   }
@@ -596,7 +678,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     document.documentElement.style.background = '';
     var app = document.getElementById('app');
     var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
-    var need = Math.round(88 - (state.sensitivity / 100) * 68);
+    var need = Math.round(20 - (state.sensitivity / 100) * 17 + 10); // rough initial; live value updates
     var roomBox = state.room
       ? ('<div class="okbox"><strong>Room active.</strong> Only <em>count changes</em> sync (not every slider move), so the free host is less likely to rate-limit.<br>Room id: <span class="room-code">' +
          escapeHtml(state.room) +
@@ -656,11 +738,11 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       '</div>' +
       '<div class="meter-wrap" style="margin-top:10px">' +
       '<div class="meter"><i id="levelFill" style="width:' + audio.level.toFixed(1) + '%"></i></div>' +
-      '<div class="meter-labels"><span>Level <span id="levelVal">' + Math.round(audio.level) + '%</span></span><span>Trigger ≈ ' + need + '%+</span></div>' +
+      '<div class="meter-labels"><span>Level <span id="levelVal">' + Math.round(audio.level) + '%</span></span><span>Trigger ≥ <span id="trigVal">' + need + '</span>%</span></div>' +
       '</div>' +
       '<div class="row"><label class="field">Sensitivity (higher = more sensitive)<input id="sens" type="range" min="15" max="95" value="' + state.sensitivity + '" /></label></div>' +
       '<div class="row"><label class="field">Cooldown ms<input id="cool" type="range" min="500" max="4000" step="100" value="' + state.cooldown + '" /></label></div>' +
-      '<p class="hint" style="margin:8px 0 0">Auto is approximate. False triggers: hit −1. Sensitivity is local only (not spammed to sync).</p>' +
+      '<p class="hint" style="margin:8px 0 0">Cough into the mic — watch Level jump. Raise sensitivity if it never hits Trigger. False triggers: −1. Use the correct mic in browser site settings.</p>' +
       (audio.error ? ('<div class="warn">Mic error: ' + escapeHtml(audio.error) + '</div>') : '') +
       '</section></div>' +
 
@@ -698,10 +780,15 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       render();
     };
     document.getElementById('btnTest').onclick = function () { registerCough('manual'); };
-    document.getElementById('autoToggle').onchange = function (e) {
+    document.getElementById('autoToggle').onchange = async function (e) {
       state.auto = e.target.checked;
       writeUrl();
-      // do not publish settings — local only
+      if (state.auto && audio.ctx && audio.ctx.state === 'suspended') {
+        try { await audio.ctx.resume(); } catch (err) {}
+      }
+      if (state.auto && !audio.listening) {
+        toast('Enable mic to use auto-detect');
+      }
       render();
     };
     document.getElementById('btnMic').onclick = async function () {
@@ -716,9 +803,9 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     };
     document.getElementById('sens').oninput = function (e) {
       state.sensitivity = parseInt(e.target.value, 10);
-      var need = Math.round(88 - (state.sensitivity / 100) * 68);
+      var need = Math.round(20 - (state.sensitivity / 100) * 17 + 10); // rough initial; live value updates
       var labels = document.querySelector('.meter-labels span:last-child');
-      if (labels) labels.textContent = 'Trigger ≈ ' + need + '%+';
+      if (labels) labels.textContent = 'Trigger ≥ <span id="trigVal">' + need + '</span>%';
       saveLocal();
     };
     document.getElementById('cool').oninput = function (e) {
@@ -830,6 +917,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   boot();
 })();
 
+  
   </script>
 </body>
 </html>
