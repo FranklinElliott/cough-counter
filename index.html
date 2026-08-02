@@ -74,7 +74,9 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
 (function () {
   var STORE = 'cough-counter-v2';
   var SYNC_BASE = 'https://jsonblob.com/api/jsonBlob';
-  var POLL_MS = 450;
+  var POLL_MS = 2000;
+  var pollMs = POLL_MS;
+  var rateLimitedUntil = 0;
 
   var state = {
     mode: 'control',
@@ -260,6 +262,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
 
   async function publish(reason) {
     if (!state.room || applyingRemote) return;
+    if (Date.now() < rateLimitedUntil) return;
     syncStatus = 'publishing';
     updateSyncPill();
     try {
@@ -269,8 +272,18 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(payload())
       });
+      if (res.status === 429) {
+        rateLimitedUntil = Date.now() + 8000;
+        pollMs = 5000;
+        restartPolling();
+        syncStatus = 'ok';
+        pushLog('Sync rate-limited — slowing down (will retry)');
+        updateSyncPill();
+        return;
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       syncStatus = 'ok';
+      pollMs = POLL_MS;
       if (reason) pushLog('Synced (' + reason + ') count=' + state.count);
     } catch (err) {
       syncStatus = 'error';
@@ -284,20 +297,32 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   function schedulePublish(reason) {
     if (!state.room) return;
     clearTimeout(publishTimer);
-    publishTimer = setTimeout(function () { publish(reason || 'update'); }, 80);
+    // debounce — avoid hammering free sync host (429 rate limits)
+    publishTimer = setTimeout(function () { publish(reason || 'update'); }, 350);
   }
 
   async function pullRemote() {
     if (!state.room) return;
+    if (Date.now() < rateLimitedUntil) return;
     try {
       var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         cache: 'no-store'
       });
+      if (res.status === 429) {
+        rateLimitedUntil = Date.now() + 8000;
+        pollMs = 5000;
+        restartPolling();
+        // keep last good state — not a hard error
+        if (syncStatus === 'error') syncStatus = 'ok';
+        updateSyncPill();
+        return;
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       syncStatus = 'ok';
+      pollMs = POLL_MS;
       updateSyncPill();
       if (!data || typeof data !== 'object') return;
 
@@ -323,16 +348,26 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       paintLiveNumbers();
       if (state.mode === 'overlay') renderOverlay();
     } catch (err) {
+      // transient network blips — do not stick on error forever
       syncStatus = 'error';
       updateSyncPill();
+      pushLog('Sync pull failed: ' + ((err && err.message) || err));
     }
   }
 
   function startPolling() {
     clearInterval(pollTimer);
     if (!state.room) return;
-    pollTimer = setInterval(pullRemote, POLL_MS);
-    pullRemote();
+    // Overlay needs frequent pulls; control page mostly publishes (still light pull)
+    var ms = state.mode === 'overlay' ? pollMs : Math.max(pollMs, 4000);
+    pollTimer = setInterval(pullRemote, ms);
+    // delay first pull slightly after create to avoid 429
+    setTimeout(pullRemote, state.mode === 'overlay' ? 200 : 800);
+  }
+
+  function restartPolling() {
+    if (!state.room) return;
+    startPolling();
   }
 
   function updateSyncPill() {
@@ -524,7 +559,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     var roomBox = state.room
       ? ('<div class="okbox"><strong>Room active.</strong> Mic/manual counts on this page update OBS within ~0.5s.<br>Room id: <span class="room-code">' +
          escapeHtml(state.room) +
-         '</span><br><span class="hint">Rooms last about a day — make a new one each stream if needed.</span></div>')
+         '</span><br><span class="hint">Rooms last about a day. If you see Sync error, wait a few seconds or create a new room (free host rate limits).</span></div>')
       : '<p class="hint" style="margin-top:0">Create a room, paste the overlay URL into OBS, keep this page open with the mic on.</p>';
 
     app.innerHTML =
@@ -640,17 +675,28 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     };
     document.getElementById('sens').oninput = function (e) {
       state.sensitivity = parseInt(e.target.value, 10);
+      // local only while dragging
+      var need = Math.round(88 - (state.sensitivity / 100) * 68);
+      var labels = document.querySelector('.meter-labels');
+      if (labels) {
+        var span = labels.querySelector('span:last-child');
+        if (span) span.textContent = 'Trigger ≈ ' + need + '%+';
+      }
+    };
+    document.getElementById('sens').onchange = function (e) {
+      state.sensitivity = parseInt(e.target.value, 10);
       state.updatedAt = Date.now();
       writeUrl();
       schedulePublish('sensitivity');
-      render();
     };
     document.getElementById('cool').oninput = function (e) {
+      state.cooldown = parseInt(e.target.value, 10);
+    };
+    document.getElementById('cool').onchange = function (e) {
       state.cooldown = parseInt(e.target.value, 10);
       state.updatedAt = Date.now();
       writeUrl();
       schedulePublish('cooldown');
-      render();
     };
     document.getElementById('labelInput').onchange = function (e) {
       state.label = e.target.value.trim().slice(0, 18) || 'COUGHS';
