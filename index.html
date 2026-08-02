@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Cough Counter — Live Sync Overlay</title>
-<style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cough Counter — Live Sync Overlay</title>
+  <style>
 
 :root{--bg:#070a10;--panel:#101622;--border:#273247;--fg:#eef3ff;--muted:#8fa0bb;--primary:#7c9cff;--accent:#5eead4;--danger:#fb7185;--ok:#4ade80;--shadow:0 18px 50px rgba(0,0,0,.45);--font:"Segoe UI",system-ui,sans-serif}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%}
@@ -67,16 +67,16 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
 </style>
 </head>
 <body>
-<div id="app"></div>
-<div class="toast" id="toast"></div>
-<script>
+  <div id="app"></div>
+  <div class="toast" id="toast"></div>
+  <script>
 
 (function () {
-  var STORE = 'cough-counter-v2';
+  var STORE = 'cough-counter-v3';
+  // Free host rate-limits aggressive polling. We publish rarely; overlay polls slowly.
   var SYNC_BASE = 'https://jsonblob.com/api/jsonBlob';
-  var POLL_MS = 2000;
-  var pollMs = POLL_MS;
-  var rateLimitedUntil = 0;
+  var OVERLAY_POLL_MS = 3000;
+  var BACKOFF_MS = 15000;
 
   var state = {
     mode: 'control',
@@ -100,9 +100,13 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   var tickTimer = 0;
   var pollTimer = 0;
   var publishTimer = 0;
-  var syncStatus = 'off';
+  var syncStatus = 'off'; // off | ok | wait | error
   var lastFlash = 0;
   var applyingRemote = false;
+  var publishInFlight = false;
+  var pendingPublishReason = null;
+  var rateLimitedUntil = 0;
+  var lastPublishLogAt = 0;
 
   function toast(msg) {
     var el = document.getElementById('toast');
@@ -204,7 +208,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   function pushLog(msg) {
     var t = new Date().toLocaleTimeString();
     logLines.unshift(t + '  ' + msg);
-    if (logLines.length > 50) logLines.pop();
+    if (logLines.length > 40) logLines.pop();
     var box = document.getElementById('eventLog');
     if (box) {
       box.innerHTML = logLines.map(function (l) {
@@ -216,9 +220,6 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   function payload() {
     return {
       count: state.count,
-      sensitivity: state.sensitivity,
-      cooldown: state.cooldown,
-      auto: state.auto,
       label: state.label,
       sessionStart: state.sessionStart,
       updatedAt: state.updatedAt,
@@ -226,155 +227,16 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     };
   }
 
-  async function createRoom() {
-    syncStatus = 'publishing';
-    updateSyncPill();
-    try {
-      state.updatedAt = Date.now();
-      state.source = 'control';
-      var res = await fetch(SYNC_BASE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(payload())
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      var loc = res.headers.get('Location') || res.headers.get('location') || '';
-      var id = res.headers.get('X-jsonblob-id') || '';
-      if (!id && loc) id = loc.split('/').pop();
-      if (!id && res.url && res.url.indexOf('/jsonBlob/') >= 0) id = res.url.split('/').pop();
-      if (!id) throw new Error('No room id returned');
-      state.room = id;
-      writeUrl();
-      syncStatus = 'ok';
-      pushLog('Live room created');
-      toast('Live room ready');
-      startPolling();
-      render();
-      return id;
-    } catch (err) {
-      syncStatus = 'error';
-      pushLog('Room create failed: ' + ((err && err.message) || err));
-      toast('Could not create live room');
-      updateSyncPill();
-      return '';
-    }
-  }
-
-  async function publish(reason) {
-    if (!state.room || applyingRemote) return;
-    if (Date.now() < rateLimitedUntil) return;
-    syncStatus = 'publishing';
-    updateSyncPill();
-    try {
-      state.updatedAt = Date.now();
-      var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(payload())
-      });
-      if (res.status === 429) {
-        rateLimitedUntil = Date.now() + 8000;
-        pollMs = 5000;
-        restartPolling();
-        syncStatus = 'ok';
-        pushLog('Sync rate-limited — slowing down (will retry)');
-        updateSyncPill();
-        return;
-      }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      syncStatus = 'ok';
-      pollMs = POLL_MS;
-      if (reason) pushLog('Synced (' + reason + ') count=' + state.count);
-    } catch (err) {
-      syncStatus = 'error';
-      pushLog('Sync publish failed: ' + ((err && err.message) || err));
-    }
-    updateSyncPill();
-    var urlBox = document.getElementById('urlBox');
-    if (urlBox) urlBox.value = obsUrl();
-  }
-
-  function schedulePublish(reason) {
-    if (!state.room) return;
-    clearTimeout(publishTimer);
-    // debounce — avoid hammering free sync host (429 rate limits)
-    publishTimer = setTimeout(function () { publish(reason || 'update'); }, 350);
-  }
-
-  async function pullRemote() {
-    if (!state.room) return;
-    if (Date.now() < rateLimitedUntil) return;
-    try {
-      var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        cache: 'no-store'
-      });
-      if (res.status === 429) {
-        rateLimitedUntil = Date.now() + 8000;
-        pollMs = 5000;
-        restartPolling();
-        // keep last good state — not a hard error
-        if (syncStatus === 'error') syncStatus = 'ok';
-        updateSyncPill();
-        return;
-      }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      var data = await res.json();
-      syncStatus = 'ok';
-      pollMs = POLL_MS;
-      updateSyncPill();
-      if (!data || typeof data !== 'object') return;
-
-      var remoteAt = Number(data.updatedAt) || 0;
-      if (remoteAt && remoteAt <= state.updatedAt) return;
-
-      var prev = state.count;
-      applyingRemote = true;
-      if (Number.isFinite(data.count)) state.count = Math.max(0, Math.floor(data.count));
-      if (Number.isFinite(data.sensitivity)) state.sensitivity = Math.min(95, Math.max(15, data.sensitivity));
-      if (Number.isFinite(data.cooldown)) state.cooldown = Math.min(4000, Math.max(500, data.cooldown));
-      if (typeof data.auto === 'boolean') state.auto = data.auto;
-      if (data.label) state.label = String(data.label).slice(0, 18);
-      if (Number.isFinite(data.sessionStart) && data.sessionStart > 1000000000) state.sessionStart = data.sessionStart;
-      state.updatedAt = remoteAt || Date.now();
-      writeUrl();
-      applyingRemote = false;
-
-      if (state.count !== prev) {
-        lastFlash = Date.now();
-        pushLog('Remote update → ' + state.count + (data.source ? ' (' + data.source + ')' : ''));
-      }
-      paintLiveNumbers();
-      if (state.mode === 'overlay') renderOverlay();
-    } catch (err) {
-      // transient network blips — do not stick on error forever
-      syncStatus = 'error';
-      updateSyncPill();
-      pushLog('Sync pull failed: ' + ((err && err.message) || err));
-    }
-  }
-
-  function startPolling() {
-    clearInterval(pollTimer);
-    if (!state.room) return;
-    // Overlay needs frequent pulls; control page mostly publishes (still light pull)
-    var ms = state.mode === 'overlay' ? pollMs : Math.max(pollMs, 4000);
-    pollTimer = setInterval(pullRemote, ms);
-    // delay first pull slightly after create to avoid 429
-    setTimeout(pullRemote, state.mode === 'overlay' ? 200 : 800);
-  }
-
-  function restartPolling() {
-    if (!state.room) return;
-    startPolling();
-  }
-
   function updateSyncPill() {
     var el = document.getElementById('syncPill');
     if (!el) return;
     if (!state.room) {
       el.textContent = 'Sync off';
+      el.className = 'status-pill';
+      return;
+    }
+    if (Date.now() < rateLimitedUntil || syncStatus === 'wait') {
+      el.textContent = 'Sync pause';
       el.className = 'status-pill';
       return;
     }
@@ -391,6 +253,188 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       el.textContent = 'Room ready';
       el.className = 'status-pill sync';
     }
+  }
+
+  async function createRoom() {
+    syncStatus = 'publishing';
+    updateSyncPill();
+    try {
+      state.updatedAt = Date.now();
+      state.source = 'control';
+      var res = await fetch(SYNC_BASE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload())
+      });
+      if (res.status === 429) {
+        rateLimitedUntil = Date.now() + BACKOFF_MS;
+        syncStatus = 'wait';
+        pushLog('Host busy (429). Wait ~15s then try Create room again.');
+        updateSyncPill();
+        toast('Host rate-limited — wait 15s');
+        return '';
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var loc = res.headers.get('Location') || res.headers.get('location') || '';
+      var id = res.headers.get('X-jsonblob-id') || '';
+      if (!id && loc) id = loc.split('/').pop();
+      if (!id && res.url && res.url.indexOf('/jsonBlob/') >= 0) id = res.url.split('/').pop();
+      if (!id) throw new Error('No room id returned');
+      state.room = id;
+      rateLimitedUntil = 0;
+      writeUrl();
+      syncStatus = 'ok';
+      pushLog('Live room created — only count changes are synced (saves rate limit)');
+      toast('Live room ready');
+      // Control does not poll. Overlay will poll.
+      render();
+      // one quiet verify GET after a delay
+      setTimeout(function () { pullRemote(true); }, 1200);
+      return id;
+    } catch (err) {
+      syncStatus = 'error';
+      pushLog('Room create failed: ' + ((err && err.message) || err));
+      toast('Could not create live room');
+      updateSyncPill();
+      return '';
+    }
+  }
+
+  async function publishNow(reason) {
+    if (!state.room || applyingRemote) return;
+    if (Date.now() < rateLimitedUntil) {
+      pendingPublishReason = reason || pendingPublishReason || 'retry';
+      syncStatus = 'wait';
+      updateSyncPill();
+      return;
+    }
+    if (publishInFlight) {
+      pendingPublishReason = reason || pendingPublishReason || 'queued';
+      return;
+    }
+    publishInFlight = true;
+    syncStatus = 'publishing';
+    updateSyncPill();
+    try {
+      // bump timestamp only when we actually send
+      if (!state.updatedAt) state.updatedAt = Date.now();
+      var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload())
+      });
+      if (res.status === 429) {
+        rateLimitedUntil = Date.now() + BACKOFF_MS;
+        syncStatus = 'wait';
+        pendingPublishReason = reason || 'retry';
+        var now = Date.now();
+        if (now - lastPublishLogAt > 10000) {
+          lastPublishLogAt = now;
+          pushLog('Sync paused 15s (host rate limit). Count is safe locally.');
+        }
+        updateSyncPill();
+        // retry once after backoff
+        setTimeout(function () {
+          if (pendingPublishReason) {
+            var r = pendingPublishReason;
+            pendingPublishReason = null;
+            publishNow(r);
+          }
+        }, BACKOFF_MS + 200);
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      syncStatus = 'ok';
+      rateLimitedUntil = 0;
+      if (reason && reason.indexOf('cough') >= 0) {
+        pushLog('Synced to OBS (' + reason + ') count=' + state.count);
+      }
+    } catch (err) {
+      syncStatus = 'error';
+      var now2 = Date.now();
+      if (now2 - lastPublishLogAt > 8000) {
+        lastPublishLogAt = now2;
+        pushLog('Sync publish failed: ' + ((err && err.message) || err));
+      }
+    } finally {
+      publishInFlight = false;
+      updateSyncPill();
+      var urlBox = document.getElementById('urlBox');
+      if (urlBox) urlBox.value = obsUrl();
+      if (pendingPublishReason && Date.now() >= rateLimitedUntil) {
+        var r2 = pendingPublishReason;
+        pendingPublishReason = null;
+        setTimeout(function () { publishNow(r2); }, 400);
+      }
+    }
+  }
+
+  function schedulePublish(reason) {
+    if (!state.room) return;
+    state.updatedAt = Date.now();
+    clearTimeout(publishTimer);
+    // short debounce for rapid +1 spam, still coalesces
+    publishTimer = setTimeout(function () { publishNow(reason || 'update'); }, 200);
+  }
+
+  async function pullRemote(quiet) {
+    if (!state.room) return;
+    if (Date.now() < rateLimitedUntil) {
+      syncStatus = 'wait';
+      updateSyncPill();
+      return;
+    }
+    try {
+      var res = await fetch(SYNC_BASE + '/' + encodeURIComponent(state.room), {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store'
+      });
+      if (res.status === 429) {
+        rateLimitedUntil = Date.now() + BACKOFF_MS;
+        syncStatus = 'wait';
+        updateSyncPill();
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      syncStatus = 'ok';
+      updateSyncPill();
+      if (!data || typeof data !== 'object') return;
+
+      var remoteAt = Number(data.updatedAt) || 0;
+      // Overlay should always apply newer remote counts
+      if (remoteAt && remoteAt <= state.updatedAt && state.mode === 'control') return;
+
+      var prev = state.count;
+      applyingRemote = true;
+      if (Number.isFinite(data.count)) state.count = Math.max(0, Math.floor(data.count));
+      if (data.label) state.label = String(data.label).slice(0, 18);
+      if (Number.isFinite(data.sessionStart) && data.sessionStart > 1000000000) state.sessionStart = data.sessionStart;
+      if (remoteAt > state.updatedAt) state.updatedAt = remoteAt;
+      writeUrl();
+      applyingRemote = false;
+
+      if (state.count !== prev) {
+        lastFlash = Date.now();
+        if (!quiet) pushLog('Remote update → ' + state.count);
+      }
+      paintLiveNumbers();
+      if (state.mode === 'overlay') renderOverlay();
+    } catch (err) {
+      if (!quiet) {
+        syncStatus = 'error';
+        updateSyncPill();
+      }
+    }
+  }
+
+  function startPolling() {
+    clearInterval(pollTimer);
+    // Only overlay polls. Control only publishes on count changes.
+    if (!state.room || state.mode !== 'overlay') return;
+    pollTimer = setInterval(function () { pullRemote(true); }, OVERLAY_POLL_MS);
+    setTimeout(function () { pullRemote(true); }, 400);
   }
 
   function stopMic() {
@@ -502,7 +546,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     writeUrl();
     pushLog((delta > 0 ? 'Manual +' : 'Manual ') + delta + ' → ' + state.count);
     paintLiveNumbers();
-    schedulePublish('adjust');
+    schedulePublish(delta >= 0 ? 'manual-cough' : 'undo');
     if (!document.getElementById('countNum')) render();
   }
 
@@ -525,9 +569,6 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     u.searchParams.set('mode', 'overlay');
     if (state.room) u.searchParams.set('room', state.room);
     u.searchParams.set('count', String(state.count));
-    u.searchParams.set('sensitivity', String(state.sensitivity));
-    u.searchParams.set('cooldown', String(state.cooldown));
-    u.searchParams.set('auto', '0');
     u.searchParams.set('label', state.label);
     u.searchParams.set('sessionStart', String(state.sessionStart));
     return u.toString();
@@ -538,7 +579,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     document.documentElement.style.background = 'transparent';
     var app = document.getElementById('app');
     var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
-    var syncTxt = state.room ? (syncStatus === 'ok' ? 'LIVE' : syncStatus === 'error' ? 'SYNC?' : 'SYNC') : 'LOCAL';
+    var syncTxt = !state.room ? 'LOCAL' : (syncStatus === 'ok' ? 'LIVE' : (syncStatus === 'wait' ? 'WAIT' : (syncStatus === 'error' ? 'SYNC?' : 'SYNC')));
     var flash = (Date.now() - lastFlash < 450) ? ' flash' : '';
     app.innerHTML =
       '<div class="ov"><div class="ov-card' + flash + '">' +
@@ -557,9 +598,9 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
     var need = Math.round(88 - (state.sensitivity / 100) * 68);
     var roomBox = state.room
-      ? ('<div class="okbox"><strong>Room active.</strong> Mic/manual counts on this page update OBS within ~0.5s.<br>Room id: <span class="room-code">' +
+      ? ('<div class="okbox"><strong>Room active.</strong> Only <em>count changes</em> sync (not every slider move), so the free host is less likely to rate-limit.<br>Room id: <span class="room-code">' +
          escapeHtml(state.room) +
-         '</span><br><span class="hint">Rooms last about a day. If you see Sync error, wait a few seconds or create a new room (free host rate limits).</span></div>')
+         '</span><br><span class="hint">If pill says Sync pause, wait ~15s — count still works locally, then retries.</span></div>')
       : '<p class="hint" style="margin-top:0">Create a room, paste the overlay URL into OBS, keep this page open with the mic on.</p>';
 
     app.innerHTML =
@@ -576,6 +617,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       '<button type="button" class="btn accent" id="btnRoom">' + (state.room ? 'Create new room' : 'Create live room') + '</button>' +
       '<button type="button" class="btn ghost" id="btnCopy">Copy overlay URL</button>' +
       '<button type="button" class="btn ghost" id="btnOpenOv">Open overlay</button>' +
+      '<button type="button" class="btn ghost sm" id="btnForceSync">Push count now</button>' +
       '<span class="status-pill" id="syncPill">Sync off</span>' +
       '</div>' +
       '<label class="field" style="margin-top:10px">OBS overlay URL<textarea class="url-box" id="urlBox" readonly>' +
@@ -618,7 +660,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       '</div>' +
       '<div class="row"><label class="field">Sensitivity (higher = more sensitive)<input id="sens" type="range" min="15" max="95" value="' + state.sensitivity + '" /></label></div>' +
       '<div class="row"><label class="field">Cooldown ms<input id="cool" type="range" min="500" max="4000" step="100" value="' + state.cooldown + '" /></label></div>' +
-      '<p class="hint" style="margin:8px 0 0">Auto is approximate. False triggers: hit −1 (syncs to OBS too).</p>' +
+      '<p class="hint" style="margin:8px 0 0">Auto is approximate. False triggers: hit −1. Sensitivity is local only (not spammed to sync).</p>' +
       (audio.error ? ('<div class="warn">Mic error: ' + escapeHtml(audio.error) + '</div>') : '') +
       '</section></div>' +
 
@@ -635,7 +677,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       '<div class="log" id="eventLog">' +
       (logLines.length ? logLines.map(function (l) { return '<div>' + escapeHtml(l) + '</div>'; }).join('') : '<div>No events yet</div>') +
       '</div></section>' +
-      '<footer class="note">Client-side mic · Live room via JSONBlob (~24h) · <a href="https://github.com/FranklinElliott/cough-counter">GitHub</a></footer>' +
+      '<footer class="note">Client-side mic · Count-only live sync · <a href="https://github.com/FranklinElliott/cough-counter">GitHub</a></footer>' +
       '</div>';
 
     wireControl();
@@ -658,9 +700,8 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     document.getElementById('btnTest').onclick = function () { registerCough('manual'); };
     document.getElementById('autoToggle').onchange = function (e) {
       state.auto = e.target.checked;
-      state.updatedAt = Date.now();
       writeUrl();
-      schedulePublish('auto-toggle');
+      // do not publish settings — local only
       render();
     };
     document.getElementById('btnMic').onclick = async function () {
@@ -675,28 +716,14 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     };
     document.getElementById('sens').oninput = function (e) {
       state.sensitivity = parseInt(e.target.value, 10);
-      // local only while dragging
       var need = Math.round(88 - (state.sensitivity / 100) * 68);
-      var labels = document.querySelector('.meter-labels');
-      if (labels) {
-        var span = labels.querySelector('span:last-child');
-        if (span) span.textContent = 'Trigger ≈ ' + need + '%+';
-      }
-    };
-    document.getElementById('sens').onchange = function (e) {
-      state.sensitivity = parseInt(e.target.value, 10);
-      state.updatedAt = Date.now();
-      writeUrl();
-      schedulePublish('sensitivity');
+      var labels = document.querySelector('.meter-labels span:last-child');
+      if (labels) labels.textContent = 'Trigger ≈ ' + need + '%+';
+      saveLocal();
     };
     document.getElementById('cool').oninput = function (e) {
       state.cooldown = parseInt(e.target.value, 10);
-    };
-    document.getElementById('cool').onchange = function (e) {
-      state.cooldown = parseInt(e.target.value, 10);
-      state.updatedAt = Date.now();
-      writeUrl();
-      schedulePublish('cooldown');
+      saveLocal();
     };
     document.getElementById('labelInput').onchange = function (e) {
       state.label = e.target.value.trim().slice(0, 18) || 'COUGHS';
@@ -725,6 +752,12 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     document.getElementById('btnRoom').onclick = async function () {
       if (state.room && !confirm('Create a brand new room? Update OBS with the new overlay URL.')) return;
       await createRoom();
+    };
+    document.getElementById('btnForceSync').onclick = function () {
+      if (!state.room) { toast('Create a live room first'); return; }
+      state.updatedAt = Date.now();
+      publishNow('manual-push');
+      toast('Pushing count…');
     };
     document.getElementById('btnCopy').onclick = async function () {
       if (!state.room) { toast('Create a live room first'); return; }
@@ -782,6 +815,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       if (c) c.textContent = cph;
       var d = document.getElementById('ovCph');
       if (d) d.textContent = cph;
+      updateSyncPill();
     }, 500);
   }
 
@@ -790,12 +824,12 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     writeUrl();
     render();
     startTicks();
-    if (state.room) startPolling();
+    if (state.mode === 'overlay' && state.room) startPolling();
   }
 
   boot();
 })();
 
-</script>
+  </script>
 </body>
 </html>
