@@ -72,6 +72,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   <script>
 
 
+
 (function () {
   var STORE = 'cough-counter-v3';
   // Free host rate-limits aggressive polling. We publish rarely; overlay polls slowly.
@@ -83,8 +84,8 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     mode: 'control',
     room: '',
     count: 0,
-    sensitivity: 72,
-    cooldown: 900,
+    sensitivity: 58,
+    cooldown: 1200,
     auto: false,
     label: 'COUGHS',
     sessionStart: Math.floor(Date.now() / 1000),
@@ -161,11 +162,11 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     state.count = Math.max(0, Math.floor(count));
 
     var sensitivity = parseInt(p.get('sensitivity') || p.get('sens') || '', 10);
-    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(local.sensitivity) ? local.sensitivity : 72;
+    if (!Number.isFinite(sensitivity)) sensitivity = Number.isFinite(local.sensitivity) ? local.sensitivity : 58;
     state.sensitivity = Math.min(95, Math.max(15, sensitivity));
 
     var cooldown = parseInt(p.get('cooldown') || '', 10);
-    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(local.cooldown) ? local.cooldown : 900;
+    if (!Number.isFinite(cooldown)) cooldown = Number.isFinite(local.cooldown) ? local.cooldown : 1200;
     state.cooldown = Math.min(4000, Math.max(500, cooldown));
 
     var auto = p.get('auto');
@@ -490,6 +491,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       audio.baseline = 8;
       audio.peak = 0;
       audio.aboveSince = 0;
+      audio.prevLevel = 0;
       audio.listening = true;
       pushLog('Mic enabled');
       loopAudio();
@@ -513,83 +515,97 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     var sampleRate = audio.ctx.sampleRate || 48000;
     var binHz = sampleRate / (audio.analyser.fftSize || 1024);
 
-    // RMS from waveform (catches short bursts better than smoothed FFT alone)
+    // Waveform peak + RMS
     var rms = 0;
+    var peakWave = 0;
     if (audio.timeData) {
       var td = audio.timeData;
       var sum = 0;
       for (var t = 0; t < td.length; t++) {
         var x = (td[t] - 128) / 128;
+        var ax = x < 0 ? -x : x;
+        if (ax > peakWave) peakWave = ax;
         sum += x * x;
       }
-      rms = Math.sqrt(sum / td.length); // 0..~1
+      rms = Math.sqrt(sum / td.length);
     }
 
-    var mid = 0, midN = 0, high = 0, highN = 0, low = 0, lowN = 0, i, hz, v;
+    var low = 0, lowN = 0, mid = 0, midN = 0, high = 0, highN = 0, i, hz, v;
     for (i = 0; i < data.length; i++) {
       hz = i * binHz;
       v = data[i];
-      if (hz < 150) { low += v; lowN++; }
-      else if (hz < 4000) { mid += v; midN++; }
-      else if (hz < 9000) { high += v; highN++; }
+      if (hz < 200) { low += v; lowN++; }
+      else if (hz < 3500) { mid += v; midN++; }
+      else if (hz < 8000) { high += v; highN++; }
     }
+    low = lowN ? low / lowN : 0;
     mid = midN ? mid / midN : 0;
     high = highN ? high / highN : 0;
-    low = lowN ? low / lowN : 0;
 
-    // Combined 0-100 level: waveform RMS + mid band
-    var rmsLevel = Math.min(100, rms * 220);
-    var fftLevel = Math.min(100, ((mid * 0.7 + high * 0.3) / 255) * 160);
-    var level = Math.max(rmsLevel, fftLevel * 0.85);
+    // Display level 0-100
+    var rmsLevel = Math.min(100, rms * 200);
+    var fftLevel = Math.min(100, ((mid * 0.65 + high * 0.25 + low * 0.1) / 255) * 150);
+    var level = Math.max(rmsLevel, fftLevel * 0.9);
     audio.level = level;
-    if (level > audio.peak) audio.peak = level;
-    // decay peak for display
-    audio.peak *= 0.98;
 
-    // Adaptive baseline (slow rise toward quiet ambient)
-    if (level < audio.baseline + 6) {
-      audio.baseline = audio.baseline * 0.98 + level * 0.02;
-    } else {
-      audio.baseline = audio.baseline * 0.9995 + Math.min(level, audio.baseline + 2) * 0.0005;
+    // Slow ambient baseline (only learn when not loud)
+    if (level < audio.baseline + 8) {
+      audio.baseline = audio.baseline * 0.96 + level * 0.04;
     }
 
-    // sensitivity 15..95 → onset margin above baseline (lower margin = more sensitive)
-    // sens 95 ≈ +4 above baseline, sens 55 ≈ +10, sens 15 ≈ +18
-    var margin = 20 - (state.sensitivity / 100) * 17;
-    var triggerAt = audio.baseline + margin;
-    // also require a minimum absolute floor so silence doesn't trigger
-    var floor = 12 - (state.sensitivity / 100) * 6; // 6..12
+    // sensitivity 15..95 → how far above baseline + absolute floor
+    // More conservative than previous version
+    var margin = 28 - (state.sensitivity / 100) * 16; // sens95→12, sens55→19, sens15→26
+    var absFloor = 28 - (state.sensitivity / 100) * 10; // 18..28
+    var triggerAt = Math.max(absFloor, audio.baseline + margin);
     var now = Date.now();
 
+    // Track rising edge using previous level
+    if (typeof audio.prevLevel !== 'number') audio.prevLevel = level;
+    var rise = level - audio.prevLevel;
+    audio.prevLevel = level * 0.6 + audio.prevLevel * 0.4; // light smooth for next rise
+
     if (state.auto && audio.listening) {
-      var onset = level >= triggerAt && level >= floor;
-      // cough-ish: mid energy present OR strong RMS spike (don't require strict spectral gate)
-      var spectralOk = mid > 10 || rmsLevel > triggerAt;
-      if (onset && spectralOk) {
-        if (!audio.aboveSince) audio.aboveSince = now;
+      // Cough-like spectral shape: mid energy meaningful vs low rumble
+      var midOk = mid > 28 && mid > low * 0.85;
+      // Strong enough absolute + above adaptive trigger
+      var loudOk = level >= triggerAt;
+      // Prefer sudden onset (not gradual background)
+      var onsetOk = rise > (3.5 - state.sensitivity / 50) || level > audio.baseline + margin + 6;
+
+      if (loudOk && midOk && onsetOk) {
+        if (!audio.aboveSince) {
+          audio.aboveSince = now;
+          audio.peak = level;
+        } else if (level > audio.peak) {
+          audio.peak = level;
+        }
+      } else if (audio.aboveSince) {
         var held = now - audio.aboveSince;
-        // short burst: 25ms–900ms above threshold (cough is brief; speech often longer)
-        if (held >= 25 && held <= 900 && now - audio.lastCoughAt >= state.cooldown) {
-          // require drop soon after — fire on peak-ish: level near recent peak
-          if (level >= audio.peak * 0.72) {
-            audio.lastCoughAt = now;
-            audio.aboveSince = 0;
-            audio.debug = 'hit L' + Math.round(level) + ' B' + Math.round(audio.baseline);
-            registerCough('auto');
-          }
+        // Burst length: cough ~40–500ms. Longer = speech/noise.
+        var shortBurst = held >= 40 && held <= 520;
+        var strongEnough = audio.peak >= triggerAt + 2;
+        // Must have dropped (burst ended) — continuous noise won't drop
+        var dropped = level < audio.peak * 0.72 && level < triggerAt;
+        if (shortBurst && strongEnough && dropped && now - audio.lastCoughAt >= state.cooldown) {
+          audio.lastCoughAt = now;
+          audio.aboveSince = 0;
+          audio.peak = 0;
+          registerCough('auto');
+        } else if (held > 520 || level < audio.baseline + 4) {
+          // too long or back to quiet without qualifying — discard
+          audio.aboveSince = 0;
+          audio.peak = 0;
         }
-      } else {
-        // if we were above a while and drop, that trailing edge can count as a cough end
-        if (audio.aboveSince && now - audio.aboveSince >= 30 && now - audio.aboveSince <= 800) {
-          if (now - audio.lastCoughAt >= state.cooldown && audio.peak >= triggerAt) {
-            audio.lastCoughAt = now;
-            audio.debug = 'edge L' + Math.round(level) + ' P' + Math.round(audio.peak);
-            registerCough('auto');
-          }
-        }
-        audio.aboveSince = 0;
       }
-      audio.debug = 'L' + Math.round(level) + ' need≥' + Math.round(Math.max(triggerAt, floor)) + ' base' + Math.round(audio.baseline);
+
+      // timeout stuck "above" state
+      if (audio.aboveSince && now - audio.aboveSince > 700) {
+        audio.aboveSince = 0;
+        audio.peak = 0;
+      }
+
+      audio.debug = 'L' + Math.round(level) + ' need≥' + Math.round(triggerAt) + ' base' + Math.round(audio.baseline) + (audio.aboveSince ? ' BURST' : '');
     }
 
     var fill = document.getElementById('levelFill');
@@ -597,7 +613,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     var lvl = document.getElementById('levelVal');
     if (lvl) lvl.textContent = Math.round(level) + '%';
     var trig = document.getElementById('trigVal');
-    if (trig) trig.textContent = Math.round(Math.max(triggerAt, floor)) + '%';
+    if (trig) trig.textContent = Math.round(triggerAt);
     var dbg = document.getElementById('micDebug');
     if (dbg) dbg.textContent = audio.debug || '';
 
@@ -678,7 +694,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     document.documentElement.style.background = '';
     var app = document.getElementById('app');
     var elapsed = formatDuration(Date.now() - state.sessionStart * 1000);
-    var need = Math.round(20 - (state.sensitivity / 100) * 17 + 10); // rough initial; live value updates
+    var need = Math.round(Math.max(18, 28 - (state.sensitivity / 100) * 10)); // initial abs floor estimate
     var roomBox = state.room
       ? ('<div class="okbox"><strong>Room active.</strong> Only <em>count changes</em> sync (not every slider move), so the free host is less likely to rate-limit.<br>Room id: <span class="room-code">' +
          escapeHtml(state.room) +
@@ -742,7 +758,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
       '</div>' +
       '<div class="row"><label class="field">Sensitivity (higher = more sensitive)<input id="sens" type="range" min="15" max="95" value="' + state.sensitivity + '" /></label></div>' +
       '<div class="row"><label class="field">Cooldown ms<input id="cool" type="range" min="500" max="4000" step="100" value="' + state.cooldown + '" /></label></div>' +
-      '<p class="hint" style="margin:8px 0 0">Cough into the mic — watch Level jump. Raise sensitivity if it never hits Trigger. False triggers: −1. Use the correct mic in browser site settings.</p>' +
+      '<p class="hint" style="margin:8px 0 0">Counts short loud bursts only (rise + mid energy + drop). Ambient chatter should not count. If quiet coughs miss: raise sensitivity. If random noise counts: lower sensitivity / raise cooldown.</p>' +
       (audio.error ? ('<div class="warn">Mic error: ' + escapeHtml(audio.error) + '</div>') : '') +
       '</section></div>' +
 
@@ -803,7 +819,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
     };
     document.getElementById('sens').oninput = function (e) {
       state.sensitivity = parseInt(e.target.value, 10);
-      var need = Math.round(20 - (state.sensitivity / 100) * 17 + 10); // rough initial; live value updates
+      var need = Math.round(Math.max(18, 28 - (state.sensitivity / 100) * 10)); // initial abs floor estimate
       var labels = document.querySelector('.meter-labels span:last-child');
       if (labels) labels.textContent = 'Trigger ≥ <span id="trigVal">' + need + '</span>%';
       saveLocal();
@@ -917,6 +933,7 @@ footer.note{margin-top:14px;color:var(--muted);font-size:.86rem}
   boot();
 })();
 
+  
   
   </script>
 </body>
