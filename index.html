@@ -101,6 +101,42 @@ a:hover{text-decoration:underline;text-underline-offset:3px}
   .btn,.card,.toast,.ov-card{transition:none!important;animation:none!important}
 }
 
+/* RESPONSIVE-POLISH */
+
+html { overflow-x: clip; -webkit-text-size-adjust: 100%; }
+body { overflow-x: clip; min-height: 100dvh; }
+.wrap {
+  padding: 20px 16px max(72px, calc(48px + env(safe-area-inset-bottom)));
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+@media (min-width: 640px) {
+  .wrap { padding: 28px 20px 96px; }
+}
+.app-head { gap: 12px; margin-bottom: 20px; }
+.brand h1 { font-size: clamp(1.55rem, 5.5vw, 2.25rem); }
+.brand p { font-size: 14px; }
+.stat-grid { gap: 8px; }
+@media (max-width: 420px) {
+  .stat-grid { grid-template-columns: 1fr; }
+  .stat { display: flex; align-items: center; justify-content: space-between; text-align: left; padding: 12px 14px; }
+  .stat .v { margin-top: 0; font-size: 1.35rem; }
+  .big-count .num { font-size: clamp(3.2rem, 18vw, 5rem); }
+  .row .btn { flex: 1 1 calc(50% - 8px); justify-content: center; text-align: center; }
+  .row .btn.ghost.sm { flex: 1 1 auto; }
+}
+.btn { min-height: 44px; touch-action: manipulation; display: inline-flex; align-items: center; justify-content: center; }
+.btn.sm { min-height: 36px; }
+.field input[type=text], .field input[type=number], .url-box { font-size: 16px; } /* prevent iOS zoom */
+@media (min-width: 860px) {
+  .grid { position: relative; }
+  .grid > .card:last-child { position: sticky; top: 16px; }
+}
+.ov { padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.card { padding: 18px 16px; }
+@media (min-width: 640px) { .card { padding: 22px 20px; } }
+
+/* END-RESPONSIVE-POLISH */
 </style>
 </head>
 <body>
